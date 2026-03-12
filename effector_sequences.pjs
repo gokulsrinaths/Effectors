@@ -1,0 +1,22 @@
+{
+  "version": "1.2",
+  "dbname": "effector_sequences",
+  "dbtype": "Protein",
+  "db-version": 5,
+  "description": "Effector Sequences",
+  "number-of-letters": 89064,
+  "number-of-sequences": 464,
+  "last-updated": "2026-01-09T02:33:00",
+  "number-of-volumes": 1,
+  "bytes-total": 1133547,
+  "bytes-to-cache": 93349,
+  "files": [
+    "effector_sequences.pdb",
+    "effector_sequences.phr",
+    "effector_sequences.pin",
+    "effector_sequences.pot",
+    "effector_sequences.psq",
+    "effector_sequences.ptf",
+    "effector_sequences.pto"
+  ]
+}
