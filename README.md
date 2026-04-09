@@ -1,148 +1,184 @@
-## Structure-based Effector Discovery Pipeline
+# Structure-based Effector Discovery Pipeline
 
-Research web application for structure-based effector discovery. The product
-accepts protein structures, single sequences, and multi-FASTA inputs, then runs
-sequence search and structure comparison against local effector databases.
+Research infrastructure for structure-based effector discovery. This project
+accepts protein structures, single sequences, and multi-FASTA inputs, then uses
+BLAST and TM-align against local effector databases to classify known or novel
+effectors. Optional ChimeraX integration adds structure renderings for visual
+inspection.
 
-This repository now contains two execution surfaces:
+The repository supports both:
 
-- the original synchronous research demo
-- a new hosted-product scaffold with persistent jobs, staged uploads, a worker,
+- a synchronous research/demo workflow for direct local use
+- a hosted async workflow with persistent jobs, a worker process, staged uploads,
   result summaries, and email-ready completion flow
 
----
+## Table of contents
 
-## 1. What the product does
+1. [Overview](#overview)
+2. [Capabilities](#capabilities)
+3. [Architecture](#architecture)
+4. [Core workflows](#core-workflows)
+5. [Repository layout](#repository-layout)
+6. [Quick start: local research demo](#quick-start-local-research-demo)
+7. [Quick start: hosted async workflow](#quick-start-hosted-async-workflow)
+8. [Linux deployment](#linux-deployment)
+9. [ChimeraX](#chimerax)
+10. [Status and roadmap](#status-and-roadmap)
+11. [Important notes](#important-notes)
 
-The core product flow is:
+## Overview
 
-1. user submits a structure, sequence, or FASTA file
-2. backend runs BLAST and/or TM-align against the local effector databases
-3. backend returns a classification summary and supporting match data
-4. optional ChimeraX rendering produces a protein image
-5. results are shown in the UI and can be prepared for email delivery
+The project is built around a simple biological question:
 
-Supported inputs:
+- if a submitted protein is already known, identify the matching family quickly
+- if it is structurally similar, show the best supported match
+- if it is novel or incomplete, return a clear result and preserve a path to
+  downstream structure generation workflows
 
-- `.pdb` or `.cif` structure uploads
+Inputs supported today:
+
+- `.pdb` and `.cif` structure files
 - single protein sequences
-- multi-FASTA uploads
+- multi-FASTA files
 
-Core tools:
+Primary local data assets:
 
-- BLAST+ (`blastp`, `makeblastdb`)
-- TM-align
-- optional ChimeraX for structure rendering
+- [`Database/`](Database) for curated effector-related structures
+- [`effector_sequences.fasta`](effector_sequences.fasta) for sequence search
 
-Core data:
+## Capabilities
 
-- `Database/` for local PDB structures
-- `effector_sequences.fasta` for the local sequence database
+### Research engine
 
----
+- Structure-first comparison against the local PDB database
+- Sequence-first discovery through BLASTP against the local FASTA database
+- Multi-FASTA batch handling through the same per-sequence logic
+- Optional ChimeraX-backed image generation for protein structures
 
-## 2. Repository modes
+### Product-oriented workflow
 
-### 2.1 Research demo
+- Persistent hosted jobs with status tracking
+- Upload staging for public-facing workflows
+- Background worker process
+- Condensed result summaries suitable for UI display and email
+- SMTP-ready email integration with preview-file fallback
+- Explicit execution-mode seam for future HPC submission
 
-The original demo path is:
+## Architecture
 
-- frontend: [`frontend/app/page.tsx`](frontend/app/page.tsx)
-- backend: [`backend/main.py`](backend/main.py)
+### System view
 
-This mode processes requests synchronously and is the current biology engine of
-record.
+| Layer | Purpose | Primary files |
+| --- | --- | --- |
+| Frontend demo | Direct synchronous UI for local research workflows | [`frontend/app/page.tsx`](frontend/app/page.tsx) |
+| Frontend hosted | Async UI for public-facing job creation and polling | [`frontend/app/hosted/page.tsx`](frontend/app/hosted/page.tsx) |
+| Backend demo engine | Core biology pipeline and compatibility endpoints | [`backend/main.py`](backend/main.py) |
+| Hosted API | Persistent jobs, uploads, result access | [`backend/hosted_api/main.py`](backend/hosted_api/main.py) |
+| Worker | Polls queued hosted jobs and executes them | [`backend/hosted_api/worker.py`](backend/hosted_api/worker.py) |
+| Visualization | Optional ChimeraX rendering path | [`backend/utils/chimerax_render.py`](backend/utils/chimerax_render.py) |
+| Deployment assets | Linux backend deployment templates | [`deploy/linux/`](deploy/linux) |
 
-### 2.2 Hosted product scaffold
+### Local research/demo architecture
 
-The hosted path is:
+```mermaid
+flowchart LR
+    A[Next.js Demo UI] --> B[FastAPI Demo Backend]
+    B --> C[BLAST+]
+    B --> D[TM-align]
+    B --> E[Local Structure DB]
+    B --> F[Local Sequence DB]
+    B --> G[Optional ChimeraX]
+    G --> H[Static Visualizations]
+```
 
-- backend scaffold: [`backend/hosted_api/README.md`](backend/hosted_api/README.md)
-- entrypoint: [`backend/hosted_api/main.py`](backend/hosted_api/main.py)
-- worker: [`backend/hosted_api/worker.py`](backend/hosted_api/worker.py)
-- hosted frontend page: [`frontend/app/hosted/page.tsx`](frontend/app/hosted/page.tsx)
+### Hosted async architecture
 
-This mode adds:
+```mermaid
+flowchart LR
+    A[Public Frontend] --> B[Hosted FastAPI]
+    B --> C[Persistent Job Record]
+    B --> D[Staged Uploads]
+    E[Worker Process] --> C
+    E --> F[Current Backend Engine]
+    F --> G[BLAST+]
+    F --> H[TM-align]
+    F --> I[Optional ChimeraX]
+    F --> J[Condensed Result Summary]
+    J --> K[Result Endpoint]
+    J --> L[Email Delivery or Preview]
+```
 
-- persistent jobs
-- staged uploads
-- background worker execution
-- result retrieval endpoints
-- email preview or SMTP delivery
-- execution-mode seam for future HPC routing
+### Execution modes
 
----
+- `local`
+  - hosted jobs run through the current backend engine on the same server
+- `hpc`
+  - reserved for future MedicineBow submission wiring
 
-## 3. Product pipeline
+The hosted scaffold currently supports `local` mode in production terms. The
+code already contains the seam for later HPC integration.
 
-### 3.1 Structure upload
+## Core workflows
 
-- frontend submits a `.pdb` or `.cif`
-- backend checks for exact filename match in `Database/`
-- if needed, backend runs TM-align across the local structure DB
-- backend returns best match, TM-score, RMSD, and optional top matches
-- if ChimeraX is available and the input is a `.pdb`, a visualization image is generated
+### 1. Structure upload
 
 Primary endpoint:
 
 - `POST /api/process/structure`
 
-### 3.2 Single sequence
+Flow:
 
-- frontend submits one protein sequence
-- backend normalizes the sequence
-- backend runs BLASTP against `effector_sequences.fasta`
-- backend maps the hit to a local structure when possible
-- backend runs TM-align if structure comparison is available
-- if the sequence is novel or structure is missing, the backend returns a queued
-  structure-prediction status placeholder
+1. Accept `.pdb` or `.cif`
+2. Save upload temporarily
+3. Check whether the filename already exists in the local structure database
+4. If needed, run TM-align against the local structure database
+5. Return best match, TM-score, RMSD, and optional top matches
+6. If ChimeraX is available and the input is a `.pdb`, generate a cached image
+
+### 2. Single sequence
 
 Primary endpoint:
 
 - `POST /api/process/sequence`
 
-### 3.3 Multi-FASTA
+Flow:
 
-- frontend uploads a FASTA file
-- backend parses each sequence
-- each sequence goes through the same BLAST plus structure comparison path
-- backend returns a per-sequence result list
+1. Normalize the input sequence
+2. Run BLASTP against [`effector_sequences.fasta`](effector_sequences.fasta)
+3. Map the best hit to a local structure when possible
+4. Run TM-align when structure comparison is available
+5. Return classification, match details, and any deferred structure-generation
+   placeholder status
+
+### 3. Multi-FASTA
 
 Primary endpoint:
 
 - `POST /api/process/fasta`
 
-### 3.4 Visualization
+Flow:
 
-- backend can render a protein PNG from a PDB file using ChimeraX
-- rendered images are cached in `static/visualizations/`
-- frontend can also download matched PDB files directly
+1. Parse the FASTA file into sequences
+2. Run the single-sequence logic per entry
+3. Return a per-sequence result list
+
+### 4. Visualization
 
 Primary endpoints:
 
 - `POST /api/visualize/protein`
 - `GET /api/download/pdb?structure_id=<id>`
 
----
+Flow:
 
-## 4. Hosted async flow
+1. Resolve the relevant PDB file
+2. Render a PNG through ChimeraX if available
+3. Cache the image under `static/visualizations/`
+4. Return the image URL to the frontend
 
-The hosted-product flow is:
+### 5. Hosted async jobs
 
-1. client creates a job
-2. API stores the input and writes a persistent job record
-3. worker polls for queued jobs
-4. worker runs the current backend engine through the hosted adapter
-5. API stores a condensed result summary and full result artifact
-6. email is sent through SMTP or written to a preview file
-7. frontend polls job status and fetches final results
-
-Important constraint:
-
-- this repository currently supports `local` execution mode for hosted jobs
-- `hpc` mode is reserved for future MedicineBow submission wiring
-
-Hosted API endpoints:
+Primary endpoints:
 
 - `POST /jobs`
 - `POST /jobs/upload`
@@ -151,16 +187,58 @@ Hosted API endpoints:
 - `GET /jobs/results/{job_id}`
 - `GET /jobs/mode`
 
----
+Flow:
 
-## 5. Quick start for the original demo
+1. Create a job
+2. Persist metadata and staged input
+3. Worker reserves queued jobs
+4. Worker executes the current backend engine through the hosted adapter
+5. Summary and raw results are stored
+6. Email is sent through SMTP or written as a preview file
 
-### 5.1 Requirements
+## Repository layout
+
+```text
+backend/
+  main.py                    # current synchronous biology engine
+  requirements.txt           # local demo/backend dependencies
+  requirements-hosted.txt    # hosted backend dependencies
+  config/
+    chimerax.py             # ChimeraX path and runtime config
+  utils/
+    chimerax_render.py      # structure rendering helper
+    validate_chimerax.py    # repo-specific validation script
+  hosted_api/
+    main.py                 # hosted API entrypoint
+    worker.py               # DB-polling worker
+    config.py               # hosted runtime config
+    db.py                   # SQLAlchemy setup
+    models.py               # job persistence
+    schemas.py              # API schemas
+    routes/jobs.py          # hosted routes
+    services/               # adapter, execution, email, job runner
+frontend/
+  app/
+    page.tsx                # original synchronous demo UI
+    hosted/page.tsx         # hosted async UI
+Database/                    # local structure database
+effector_sequences.fasta     # local sequence database
+static/visualizations/       # cached ChimeraX images
+docs/
+  DISPATCHER_PRODUCT_PLAN.md
+  CHIMERAX_USAGE.md
+deploy/
+  linux/                     # Linux backend deployment assets
+```
+
+## Quick start: local research demo
+
+### Requirements
 
 - Python 3.10+
 - Node.js 18+
 
-### 5.2 Install
+### Install
 
 ```powershell
 cd backend
@@ -170,9 +248,9 @@ cd ..\frontend
 npm install
 ```
 
-### 5.3 Run
+### Run
 
-From the repo root:
+From the repository root:
 
 ```powershell
 .\start_app.ps1
@@ -183,25 +261,26 @@ Then open:
 - frontend: `http://localhost:3000`
 - backend docs: `http://localhost:8000/docs`
 
----
+This mode is best when you want to validate the biology pipeline locally and
+inspect structure and sequence behavior directly.
 
-## 6. Quick start for the hosted scaffold
+## Quick start: hosted async workflow
 
-### 6.1 Install backend dependencies
+### Install backend dependencies
 
 ```powershell
 cd backend
 py -3 -m pip install -r requirements-hosted.txt
 ```
 
-### 6.2 Run the hosted API
+### Run the hosted API
 
 ```powershell
 cd backend
 py -3 -m uvicorn hosted_api.main:app --reload
 ```
 
-### 6.3 Run the hosted worker
+### Run the worker
 
 Open a second terminal:
 
@@ -210,7 +289,7 @@ cd backend
 py -3 -m hosted_api.worker
 ```
 
-### 6.4 Run the frontend
+### Run the frontend
 
 ```powershell
 cd frontend
@@ -218,86 +297,87 @@ npm install
 npm run dev
 ```
 
-Then open:
+Open:
 
 - demo UI: `http://localhost:3000`
 - hosted async UI: `http://localhost:3000/hosted`
 
----
+This is the correct path for a future public-facing deployment.
 
-## 7. ChimeraX
+## Linux deployment
 
-ChimeraX is optional and only affects structure visualization.
+Linux backend deployment assets are included under [`deploy/linux/`](deploy/linux).
 
 Key files:
+
+- [`deploy/linux/README.md`](deploy/linux/README.md)
+- [`deploy/linux/install_backend.sh`](deploy/linux/install_backend.sh)
+- [`deploy/linux/env.backend.example`](deploy/linux/env.backend.example)
+- [`deploy/linux/systemd/effectors-api.service`](deploy/linux/systemd/effectors-api.service)
+- [`deploy/linux/systemd/effectors-worker.service`](deploy/linux/systemd/effectors-worker.service)
+- [`deploy/linux/nginx/effectors-api.conf`](deploy/linux/nginx/effectors-api.conf)
+
+Recommended backend deployment shape:
+
+- Ubuntu VM
+- FastAPI hosted backend
+- separate worker process
+- nginx reverse proxy
+- HTTPS via certbot
+
+The deployment templates currently assume:
+
+- repo root at `/opt/effectors/Effectors`
+- backend running in `local` execution mode
+
+## ChimeraX
+
+ChimeraX is optional. It is only required for structure visualization, not for
+BLAST or TM-align.
+
+Relevant files:
 
 - [`backend/config/chimerax.py`](backend/config/chimerax.py)
 - [`backend/utils/chimerax_render.py`](backend/utils/chimerax_render.py)
 - [`backend/utils/validate_chimerax.py`](backend/utils/validate_chimerax.py)
 - [`docs/CHIMERAX_USAGE.md`](docs/CHIMERAX_USAGE.md)
 
-Minimal validation:
+Minimal validation on Windows:
 
 ```powershell
 Test-Path "C:\Program Files\ChimeraX 1.11\bin\chimerax.exe"
 py -3 backend\utils\validate_chimerax.py
 ```
 
-If ChimeraX is available, uploaded PDB structures can produce cached images under
+If ChimeraX is available, uploaded PDB files can produce cached images under
 `static/visualizations/`.
 
----
+## Status and roadmap
 
-## 8. Key project files
+### Implemented
 
-```text
-backend/
-  main.py                    # current synchronous biology engine
-  requirements.txt           # demo/backend deps
-  requirements-hosted.txt    # hosted scaffold deps
-  hosted_api/
-    main.py                  # hosted API entrypoint
-    worker.py                # DB-polling worker
-    routes/jobs.py           # hosted job routes
-    services/                # adapter, email, execution, runner
-frontend/
-  app/
-    page.tsx                 # original synchronous demo UI
-    hosted/page.tsx          # hosted async UI
-Database/                    # local PDB structures
-effector_sequences.fasta     # local sequence database
-static/visualizations/       # ChimeraX image cache
-docs/
-  DISPATCHER_PRODUCT_PLAN.md
-  CHIMERAX_USAGE.md
-```
+- Real BLAST integration
+- Real TM-align integration
+- Structure, sequence, and FASTA workflows in the original frontend
+- Optional ChimeraX rendering path
+- Hosted async API scaffold with persistent jobs
+- Local worker process for queued jobs
+- Staged uploads and result retrieval
+- SMTP-ready email layer with preview fallback
+- Linux backend deployment templates
 
----
+### Next major steps
 
-## 9. Current status
+- Extract reusable pipeline services from [`backend/main.py`](backend/main.py)
+- Connect hosted `hpc` execution mode to MedicineBow for heavy jobs
+- Add a stronger queueing system if throughput grows beyond the polling worker
+- Harden auth, rate limits, and abuse controls for public internet deployment
 
-Implemented:
+## Important notes
 
-- real BLAST and TM-align integration in the original backend
-- structure, sequence, and FASTA flows in the original frontend
-- optional ChimeraX rendering
-- hosted async API scaffold with persistent jobs
-- local worker process for queued jobs
-- staged uploads and result retrieval
-- email preview fallback and SMTP-ready configuration
-
-Pending:
-
-- extract shared pipeline services out of `backend/main.py`
-- connect hosted execution mode to MedicineBow for heavy jobs
-- replace polling worker with a more production-grade queue if needed
-- harden auth, abuse control, and deployment for a public internet-facing service
-
----
-
-## 10. Notes
-
-This is still research infrastructure, not a finished production SaaS. The hosted
-scaffold is the correct next architecture for a public-facing version, but the
-real heavy-compute path should move to HPC submission rather than running large
-jobs directly on the public server.
+- This repository is research infrastructure, not a finished clinical or
+  regulated product.
+- The current hosted path is suitable for controlled public deployment after
+  environment setup, but heavy compute should eventually move to HPC submission.
+- The synchronous demo remains the best place to debug biological logic before
+  routing jobs through hosted infrastructure.

@@ -1,0 +1,15 @@
+[Unit]
+Description=Effectors Hosted API
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/effectors/Effectors/backend
+EnvironmentFile=/opt/effectors/Effectors/deploy/linux/env.backend
+ExecStart=/opt/effectors/Effectors/backend/.venv/bin/uvicorn hosted_api.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
