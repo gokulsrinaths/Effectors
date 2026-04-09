@@ -185,7 +185,9 @@ Sequence → BLAST Search →
    - `POST /api/process/structure` - Wraps `/upload/structure`
    - `POST /api/process/sequence` - Wraps `/upload/sequence` (JSON body)
    - `POST /api/process/fasta` - Wraps `/upload/multisequence`
-   - `GET /api/job/{job_id}` - Job status (placeholder)
+   - `GET /api/job/{job_id}` - In-memory lookup for completed synchronous jobs
+   - `GET /api/download/pdb?structure_id=<id>` - Download a structure from the local PDB database
+   - `GET /stats` - Compatibility summary endpoint
 
 6. **Response Models**
    - `StructureMatchResult`: Structure comparison results
@@ -204,7 +206,7 @@ Sequence → BLAST Search →
    - FASTA Upload tab
 
 2. **File Handling**
-   - Drag-and-drop file uploads
+   - Browser file uploads
    - File validation (PDB/CIF/FASTA)
    - Progress indicators
 
@@ -272,7 +274,7 @@ npm run dev
 - ✅ **BLAST+ Integration**
   - Real `blastp` searches
   - Real `makeblastdb` indexing
-  - XML output parsing
+  - Tabular output parsing (`outfmt 6`)
   - Sequence-to-structure mapping
 
 - ✅ **TM-align Integration**

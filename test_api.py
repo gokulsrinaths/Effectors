@@ -21,7 +21,7 @@ except Exception as e:
 
 # Test 2: Structure upload (if TMalign available)
 print("\n2. Testing structure upload...")
-test_pdb = "Effector structure predicted/121205__ranked_0.pdb"
+test_pdb = "Database/121205__ranked_0.pdb"
 if os.path.exists(test_pdb):
     try:
         with open(test_pdb, 'rb') as f:
@@ -38,6 +38,9 @@ if os.path.exists(test_pdb):
                     print(f"Best Match: {result.get('best_match_id')}")
                     print(f"TM-score: {result.get('tm_score')}")
                     print(f"Classification: {result.get('classification')}")
+                if data.get('job_id'):
+                    job_response = requests.get(f"{API_BASE}/api/job/{data['job_id']}", timeout=30)
+                    print(f"Job Lookup Status: {job_response.status_code}")
             else:
                 print(f"Error response: {response.text[:500]}")
     except Exception as e:

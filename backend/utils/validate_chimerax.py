@@ -10,6 +10,7 @@ import tempfile
 import pathlib
 import logging
 import os
+import shutil
 
 from config.chimerax import (
     get_chimerax_path,
@@ -39,8 +40,13 @@ def validate_chimerax() -> bool:
         logger.error(f"ChimeraX not found: {e}")
         return False
     
-    # Create temporary directory for validation
-    with tempfile.TemporaryDirectory() as temp_dir:
+    temp_dir = None
+    try:
+        # Use a project-local temp directory to avoid environment-specific TEMP permission issues.
+        temp_dir = tempfile.mkdtemp(
+            prefix="chimerax_validate_",
+            dir=str(pathlib.Path(__file__).resolve().parent)
+        )
         proof_script = pathlib.Path(temp_dir) / "proof.cxc"
         proof_image = pathlib.Path(temp_dir) / "proof.png"
         
@@ -55,7 +61,7 @@ exit
 """
         
         try:
-            proof_script.write_text(script_content)
+            proof_script.write_text(script_content, encoding="utf-8")
         except Exception as e:
             logger.error(f"Failed to create validation script: {e}")
             return False
@@ -128,3 +134,6 @@ exit
         except Exception as e:
             logger.error(f"ChimeraX validation failed with exception: {e}", exc_info=True)
             return False
+    finally:
+        if temp_dir and pathlib.Path(temp_dir).exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)

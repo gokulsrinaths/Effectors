@@ -13,13 +13,28 @@ interface Toast {
   message: string
 }
 
+interface BlastResult {
+  hit_id: string
+  e_value: number
+  identity: number
+  query_coverage?: number
+  alignment_length: number
+}
+
+interface TmAlignResult {
+  target_id: string
+  tm_score: number
+  rmsd: number
+  alignment_length: number
+}
+
 interface ClassificationResult {
   query_id: string
   classification: string
   tm_score?: number
   best_match_id?: string
-  blast_result?: any
-  tm_align_result?: any
+  blast_result?: BlastResult
+  tm_align_result?: TmAlignResult
   visualization?: {
     image?: string
     cached?: boolean
@@ -260,6 +275,9 @@ export default function Home() {
           Research infrastructure for identifying and classifying protein effectors through 
           sequence search (BLAST) and structure comparison (TM-align)
         </p>
+        <p className={styles.subtitle}>
+          Need the async hosted workflow instead of the demo path? Open <a href="/hosted">/hosted</a>.
+        </p>
       </header>
 
       <main className={styles.main}>
@@ -466,6 +484,9 @@ function ResultRow({ result }: { result: ClassificationResult }) {
                     <li>Hit ID: {result.blast_result.hit_id}</li>
                     <li>E-value: {result.blast_result.e_value.toExponential(2)}</li>
                     <li>Identity: {(result.blast_result.identity * 100).toFixed(1)}%</li>
+                    {typeof result.blast_result.query_coverage === 'number' && (
+                      <li>Query Coverage: {(result.blast_result.query_coverage * 100).toFixed(1)}%</li>
+                    )}
                     <li>Alignment Length: {result.blast_result.alignment_length}</li>
                   </ul>
                 </div>

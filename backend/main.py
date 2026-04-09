@@ -11,9 +11,9 @@ External tools are resolved via PATH for portability.
 This design supports Windows dev and Linux/HPC deployment.
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional, Tuple
@@ -57,6 +57,7 @@ class StructureMatchResult(BaseModel):
     """Result for structure upload"""
     status: str
     tm_score: Optional[float] = None
+    rmsd: Optional[float] = None
     matched_structure: Optional[str] = None
     method_used: str
     alignment_length: Optional[int] = None
@@ -65,11 +66,16 @@ class StructureMatchResult(BaseModel):
 
 class SequenceResult(BaseModel):
     """Result for sequence upload"""
+    query_id: Optional[str] = None
     status: str
     message: Optional[str] = None
     tm_score: Optional[float] = None
+    rmsd: Optional[float] = None
     matched_structure: Optional[str] = None
     blast_hit_id: Optional[str] = None
+    blast_evalue: Optional[float] = None
+    blast_identity: Optional[float] = None
+    blast_query_coverage: Optional[float] = None
     method_used: Optional[str] = None
     alignment_length: Optional[int] = None
 
@@ -126,11 +132,15 @@ _tmalign_cache = {}
 # Cache for structure files list
 _structure_files_cache = None
 
+# In-memory registry for completed jobs returned by the synchronous frontend API.
+_job_store = {}
+
 # Binary paths (detected at startup)
 BLASTP_PATH = None
 MAKEBLASTDB_PATH = None
 WSL_AVAILABLE = False
 WSL_DISTRO = None
+TMALIGN_AVAILABLE = False
 
 # ChimeraX availability (validated on startup)
 CHIMERAX_AVAILABLE = False
@@ -682,6 +692,35 @@ def interpret_tm_score(tm_score: float) -> str:
         return "same_fold"
 
 
+def normalize_sequence_input(sequence: str, sequence_id: Optional[str] = None) -> Tuple[str, str]:
+    """
+    Normalize single-sequence input.
+
+    Accepts either raw sequence text or FASTA-formatted input with an optional header.
+    Returns a tuple of (clean_sequence, resolved_sequence_id).
+    """
+    if not sequence or not sequence.strip():
+        raise HTTPException(status_code=400, detail="Sequence cannot be empty")
+
+    lines = [line.strip() for line in sequence.strip().splitlines() if line.strip()]
+    if not lines:
+        raise HTTPException(status_code=400, detail="Sequence cannot be empty")
+
+    header_id = None
+    sequence_lines = lines
+    if lines[0].startswith('>'):
+        header = lines[0][1:].strip()
+        header_id = header.split()[0] if header else None
+        sequence_lines = lines[1:]
+
+    cleaned_sequence = ''.join(sequence_lines).replace(' ', '').upper()
+    if not cleaned_sequence:
+        raise HTTPException(status_code=400, detail="Sequence cannot be empty")
+
+    resolved_sequence_id = (sequence_id or header_id or f"seq_{uuid.uuid4().hex[:8]}").strip()
+    return cleaned_sequence, resolved_sequence_id
+
+
 # NSF Phase 2: AlphaFold integration (deferred)
 def generate_structure_with_alphafold(sequence_id: str, sequence: str) -> dict:
     """
@@ -700,18 +739,13 @@ def generate_structure_with_alphafold(sequence_id: str, sequence: str) -> dict:
     }
 
 
-# ============================================================================
-# API ENDPOINTS
-# ============================================================================
+def is_tmalign_ready() -> bool:
+    """Return whether TM-align is usable in the current environment."""
+    return TMALIGN_AVAILABLE
 
-@app.get("/")
-async def root():
-    """
-    API root endpoint.
-    
-    Returns basic API information and database status.
-    For detailed tool availability, use /status endpoint.
-    """
+
+def _get_root_payload() -> dict:
+    """Build the root endpoint payload."""
     db_files = get_structure_database_files()
     return {
         "name": "Effector Discovery Pipeline API",
@@ -731,6 +765,21 @@ async def root():
         },
         "note": "All tools verified at startup. Use /status for detailed availability."
     }
+
+
+# ============================================================================
+# API ENDPOINTS
+# ============================================================================
+
+@app.get("/")
+async def root():
+    """
+    API root endpoint.
+    
+    Returns basic API information and database status.
+    For detailed tool availability, use /status endpoint.
+    """
+    return _get_root_payload()
 
 
 @app.get("/status", response_model=StatusResponse)
@@ -762,7 +811,7 @@ async def get_status():
         },
         tmalign={
             "available": tmalign_available,
-            "method": "WSL" if wsl_available else "none"
+            "method": "WSL" if tmalign_available and wsl_available else "none"
         },
         wsl={
             "available": wsl_available,
@@ -774,6 +823,15 @@ async def get_status():
             "count": structure_count
         }
     )
+
+
+@app.get("/stats")
+async def get_stats():
+    """Compatibility summary endpoint for older scripts."""
+    payload = _get_root_payload()
+    payload["tool_status"] = (await get_status()).model_dump()
+    payload["jobs_tracked"] = len(_job_store)
+    return payload
 
 
 @app.post("/upload/structure", response_model=StructureMatchResult)
@@ -791,6 +849,12 @@ async def upload_structure(file: UploadFile = File(...)):
     # Validate file type
     if not file.filename.lower().endswith(('.pdb', '.cif')):
         raise HTTPException(status_code=400, detail="File must be PDB or CIF format")
+
+    if not is_tmalign_ready():
+        raise HTTPException(
+            status_code=503,
+            detail="TM-align is unavailable in this environment. Structure comparison is disabled until WSL/TM-align access is restored."
+        )
     
     # Save uploaded file temporarily
     with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp_file:
@@ -808,7 +872,8 @@ async def upload_structure(file: UploadFile = File(...)):
                 logger.info(f"Identical filename found: {query_filename}")
                 return StructureMatchResult(
                     status="already_in_database",
-                    tm_score=0.95,
+                    tm_score=1.0,
+                    rmsd=0.0,
                     matched_structure=query_filename,
                     method_used="filename_match",
                     alignment_length=0
@@ -871,6 +936,7 @@ async def upload_structure(file: UploadFile = File(...)):
             return StructureMatchResult(
                 status="no_matches",
                 tm_score=0.0,
+                rmsd=0.0,
                 matched_structure=None,
                 method_used="TM-align",
                 alignment_length=0,
@@ -886,6 +952,7 @@ async def upload_structure(file: UploadFile = File(...)):
         return StructureMatchResult(
             status="matched",
             tm_score=best_match['tm_score'],
+            rmsd=best_match.get('rmsd', 0.0),
             matched_structure=best_match['structure'],
             method_used="TM-align",
             alignment_length=best_match.get('aligned_length', 0),
@@ -907,10 +974,7 @@ async def upload_sequence(sequence: str, sequence_id: Optional[str] = None):
     2. If hit found, map to structure and run TM-align
     3. If no hit or structure missing, return AlphaFold deferred status
     """
-    if not sequence or not sequence.strip():
-        raise HTTPException(status_code=400, detail="Sequence cannot be empty")
-    
-    seq_id = sequence_id or f"seq_{uuid.uuid4().hex[:8]}"
+    sequence, seq_id = normalize_sequence_input(sequence, sequence_id)
     logger.info(f"Processing sequence: {seq_id}")
     
     # Step 1: Run BLASTP
@@ -929,6 +993,7 @@ async def upload_sequence(sequence: str, sequence_id: Optional[str] = None):
         logger.info(f"No BLAST hit for {seq_id} - novel sequence")
         generate_structure_with_alphafold(seq_id, sequence)
         return SequenceResult(
+            query_id=seq_id,
             status="novel_sequence",
             message="Novel effector. AlphaFold structure will be generated.",
             method_used="BLAST+TM-align"
@@ -943,10 +1008,28 @@ async def upload_sequence(sequence: str, sequence_id: Optional[str] = None):
         logger.info(f"BLAST hit {hit_id} but structure not found")
         generate_structure_with_alphafold(seq_id, sequence)
         return SequenceResult(
+            query_id=seq_id,
             status="structure_missing",
             message="Structure not found. AlphaFold structure will be generated.",
             blast_hit_id=hit_id,
+            blast_evalue=blast_hit['evalue'],
+            blast_identity=blast_hit['percent_identity'] / 100.0,
+            blast_query_coverage=blast_hit['query_coverage'] / 100.0,
             method_used="BLAST+TM-align"
+        )
+
+    if not is_tmalign_ready():
+        logger.warning("TM-align unavailable; returning BLAST-only result")
+        return SequenceResult(
+            query_id=seq_id,
+            status="structure_found_no_comparison",
+            message="BLAST hit found, but TM-align is unavailable in this environment. Structure comparison is disabled until WSL/TM-align access is restored.",
+            matched_structure=os.path.basename(structure_path),
+            blast_hit_id=hit_id,
+            blast_evalue=blast_hit['evalue'],
+            blast_identity=blast_hit['percent_identity'] / 100.0,
+            blast_query_coverage=blast_hit['query_coverage'] / 100.0,
+            method_used="BLAST"
         )
     
     # Step 3: Run TM-align against database structures
@@ -956,13 +1039,18 @@ async def upload_sequence(sequence: str, sequence_id: Optional[str] = None):
     if not db_files:
         # Structure found but no database to compare against
         return SequenceResult(
+            query_id=seq_id,
             status="structure_found_no_comparison",
             message="Structure found but structure database is empty. Cannot perform TM-align comparison.",
             blast_hit_id=hit_id,
+            blast_evalue=blast_hit['evalue'],
+            blast_identity=blast_hit['percent_identity'] / 100.0,
+            blast_query_coverage=blast_hit['query_coverage'] / 100.0,
             method_used="BLAST"
         )
-    
+
     best_tm_score = 0.0
+    best_rmsd = 0.0
     best_match_structure = None
     best_aligned_length = 0
     
@@ -974,6 +1062,7 @@ async def upload_sequence(sequence: str, sequence_id: Optional[str] = None):
         # Skip self-comparison
         if str(db_file) == structure_path:
             best_tm_score = 1.0
+            best_rmsd = 0.0
             best_match_structure = os.path.basename(structure_path)
             continue
         
@@ -995,14 +1084,20 @@ async def upload_sequence(sequence: str, sequence_id: Optional[str] = None):
         
         if tm_score > best_tm_score:
             best_tm_score = tm_score
+            best_rmsd = _tmalign_cache.get(cache_key, {}).get('rmsd', 0.0)
             best_match_structure = db_filename
             best_aligned_length = _tmalign_cache.get(cache_key, {}).get('aligned_length', 0)
-    
+
     return SequenceResult(
+        query_id=seq_id,
         status="blast_hit_with_structure",
         tm_score=best_tm_score,
+        rmsd=best_rmsd,
         matched_structure=best_match_structure or os.path.basename(structure_path),
         blast_hit_id=hit_id,
+        blast_evalue=blast_hit['evalue'],
+        blast_identity=blast_hit['percent_identity'] / 100.0,
+        blast_query_coverage=blast_hit['query_coverage'] / 100.0,
         method_used="BLAST+TM-align",
         alignment_length=best_aligned_length or blast_hit['alignment_length']
     )
@@ -1069,6 +1164,7 @@ async def upload_multisequence(file: UploadFile = File(...)):
         except Exception as e:
             logger.error(f"Error processing sequence {seq_data['id']}: {e}")
             results.append(SequenceResult(
+                query_id=seq_data['id'],
                 status="error",
                 message=f"Processing failed: {str(e)}",
                 method_used="BLAST+TM-align"
@@ -1104,6 +1200,12 @@ class ProcessingResult(BaseModel):
     results: List[ClassificationResult]
     completed_at: str
     alphafold_queued: Optional[bool] = False
+
+
+def _store_job_result(result: ProcessingResult) -> ProcessingResult:
+    """Persist a completed job result for later retrieval."""
+    _job_store[result.job_id] = result.model_dump()
+    return result
 
 
 def _get_pdb_path_from_structure_name(structure_name: str) -> Optional[str]:
@@ -1145,7 +1247,7 @@ def _classify_structure_result(match_result: StructureMatchResult, query_id: str
         tm_align_result = {
             "target_id": match_result.matched_structure or "N/A",
             "tm_score": match_result.tm_score,
-            "rmsd": 0.0,
+            "rmsd": match_result.rmsd or 0.0,
             "alignment_length": match_result.alignment_length or 0
         }
     
@@ -1196,8 +1298,9 @@ def _classify_sequence_result(seq_result: SequenceResult, query_id: str) -> Clas
     if seq_result.blast_hit_id:
         blast_result = {
             "hit_id": seq_result.blast_hit_id,
-            "e_value": 0.0,
-            "identity": 0.0,
+            "e_value": seq_result.blast_evalue or 0.0,
+            "identity": seq_result.blast_identity or 0.0,
+            "query_coverage": seq_result.blast_query_coverage or 0.0,
             "alignment_length": seq_result.alignment_length or 0
         }
     
@@ -1206,7 +1309,7 @@ def _classify_sequence_result(seq_result: SequenceResult, query_id: str) -> Clas
         tm_align_result = {
             "target_id": seq_result.matched_structure or "N/A",
             "tm_score": seq_result.tm_score,
-            "rmsd": 0.0,
+            "rmsd": seq_result.rmsd or 0.0,
             "alignment_length": seq_result.alignment_length or 0
         }
     
@@ -1251,6 +1354,12 @@ async def api_process_structure(file: UploadFile = File(...)):
     # Validate file type
     if not filename.lower().endswith(('.pdb', '.cif')):
         raise HTTPException(status_code=400, detail="File must be PDB or CIF format")
+
+    if not is_tmalign_ready():
+        raise HTTPException(
+            status_code=503,
+            detail="TM-align is unavailable in this environment. Structure comparison is disabled until WSL/TM-align access is restored."
+        )
     
     # Save uploaded file temporarily
     with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp_file:
@@ -1390,13 +1499,13 @@ async def api_process_structure(file: UploadFile = File(...)):
             elif not tmp_path or not os.path.exists(tmp_path):
                 logger.warning(f"Temporary file not found for visualization: {tmp_path}")
         
-        return ProcessingResult(
+        return _store_job_result(ProcessingResult(
             job_id=f"struct_{uuid.uuid4().hex[:8]}",
             status="completed",
             results=[classification_result],
             completed_at=datetime.now().isoformat(),
             alphafold_queued=False
-        )
+        ))
     finally:
         # Clean up temp file (after visualization is generated)
         if os.path.exists(tmp_path):
@@ -1419,7 +1528,7 @@ async def api_process_sequence(request: SequenceRequest):
     seq_result = await upload_sequence(request.sequence, request.sequence_id)
     
     # Generate query ID
-    query_id = request.sequence_id or f"seq_{uuid.uuid4().hex[:8]}"
+    query_id = seq_result.query_id or request.sequence_id or f"seq_{uuid.uuid4().hex[:8]}"
     
     # Convert to frontend format
     classification_result = _classify_sequence_result(seq_result, query_id)
@@ -1427,13 +1536,13 @@ async def api_process_sequence(request: SequenceRequest):
     # Check if AlphaFold was queued (novel sequence or missing structure)
     alphafold_queued = seq_result.status in ["novel_sequence", "structure_missing"]
     
-    return ProcessingResult(
+    return _store_job_result(ProcessingResult(
         job_id=f"seq_{uuid.uuid4().hex[:8]}",
         status="completed",
         results=[classification_result],
         completed_at=datetime.now().isoformat(),
         alphafold_queued=alphafold_queued
-    )
+    ))
 
 
 @app.post("/api/process/fasta", response_model=ProcessingResult)
@@ -1450,19 +1559,46 @@ async def api_process_fasta(file: UploadFile = File(...)):
     alphafold_queued = False
     
     for i, seq_result in enumerate(multi_result.results):
-        query_id = f"seq_{i+1}"
+        query_id = seq_result.query_id or f"seq_{i+1}"
         classification_result = _classify_sequence_result(seq_result, query_id)
         classification_results.append(classification_result)
         
         if seq_result.status in ["novel_sequence", "structure_missing"]:
             alphafold_queued = True
     
-    return ProcessingResult(
+    return _store_job_result(ProcessingResult(
         job_id=f"fasta_{uuid.uuid4().hex[:8]}",
         status="completed",
         results=classification_results,
         completed_at=datetime.now().isoformat(),
         alphafold_queued=alphafold_queued
+    ))
+
+
+@app.get("/api/job/{job_id}", response_model=ProcessingResult)
+async def get_job(job_id: str):
+    """Return a previously completed synchronous job by ID."""
+    job_result = _job_store.get(job_id)
+    if not job_result:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    return job_result
+
+
+@app.get("/api/download/pdb")
+async def download_pdb(structure_id: str = Query(..., min_length=1)):
+    """Download a structure from the local database by structure ID."""
+    pdb_path = _get_pdb_path_from_structure_name(structure_id)
+    if not pdb_path:
+        raise HTTPException(status_code=404, detail=f"Structure not found: {structure_id}")
+
+    pdb_file = pathlib.Path(pdb_path)
+    if not pdb_file.exists() or not pdb_file.is_file():
+        raise HTTPException(status_code=404, detail=f"PDB file not found: {structure_id}")
+
+    return FileResponse(
+        path=str(pdb_file),
+        media_type="chemical/x-pdb",
+        filename=pdb_file.name
     )
 
 
@@ -1538,9 +1674,10 @@ def validate_binaries():
     3. WSL availability - required for TM-align
     4. TM-align via WSL - verifies `wsl TMalign -h` works
     
-    Raises RuntimeError with actionable messages if any check fails.
+    Raises RuntimeError with actionable messages if required BLAST components fail.
+    TM-align/WSL is optional at startup; if unavailable, the API starts in degraded mode.
     """
-    global BLASTP_PATH, MAKEBLASTDB_PATH, WSL_AVAILABLE, WSL_DISTRO
+    global BLASTP_PATH, MAKEBLASTDB_PATH, WSL_AVAILABLE, WSL_DISTRO, TMALIGN_AVAILABLE
     
     logger.info("Starting backend validation...")
     
@@ -1583,28 +1720,23 @@ def validate_binaries():
     # 3. Check WSL availability
     WSL_AVAILABLE, WSL_DISTRO = check_wsl_available()
     if not WSL_AVAILABLE:
-        raise RuntimeError(
-            "WSL not available.\n"
-            "ACTION REQUIRED: Install WSL with Ubuntu:\n"
-            "  1. Run: wsl --install\n"
-            "  2. Restart your computer\n"
-            "  3. Launch Ubuntu and complete setup\n"
-            "TM-align requires WSL (Ubuntu) to be installed and configured."
+        TMALIGN_AVAILABLE = False
+        logger.warning(
+            "WSL is unavailable or access is denied. "
+            "TM-align-backed structure comparison will be disabled until WSL/TM-align access is restored."
         )
-    logger.info(f"WSL verified: {WSL_DISTRO}")
-    
-    # 4. Check TM-align via WSL (uses: wsl TMalign -h)
-    if not check_tmalign_via_wsl():
-        raise RuntimeError(
-            "TM-align not available via WSL.\n"
-            "ACTION REQUIRED: Install TM-align in your WSL Ubuntu distribution:\n"
-            "  1. Open WSL Ubuntu terminal\n"
-            "  2. Download: wget https://zhanggroup.org/TM-align/TMalign.f\n"
-            "  3. Compile: gfortran -static -O3 -ffast-math -lm -o TMalign TMalign.f\n"
-            "  4. Move to PATH: sudo mv TMalign /usr/local/bin/\n"
-            "  5. Verify: wsl TMalign -h"
-        )
-    logger.info("TM-align verified via WSL")
+    else:
+        logger.info(f"WSL verified: {WSL_DISTRO}")
+
+        # 4. Check TM-align via WSL (uses: wsl TMalign -h)
+        TMALIGN_AVAILABLE = check_tmalign_via_wsl()
+        if TMALIGN_AVAILABLE:
+            logger.info("TM-align verified via WSL")
+        else:
+            logger.warning(
+                "TM-align is unavailable via WSL. "
+                "Structure comparison endpoints will return 503 until TM-align access is restored."
+            )
     
     # 5. Ensure BLAST database is indexed (auto-creates if needed)
     logger.info("Checking BLAST database...")
@@ -1646,12 +1778,12 @@ def validate_binaries():
     
     # Startup self-check complete
     logger.info("=" * 70)
-    logger.info("✓ BLAST + TM-align pipeline ready")
+    logger.info("✓ Backend validation complete")
     logger.info("=" * 70)
     logger.info(f"  BLAST+: {BLASTP_PATH}")
     logger.info(f"  Database: {SEQUENCE_DB_INDEX_PATH}")
-    logger.info(f"  WSL: {WSL_DISTRO}")
-    logger.info(f"  TM-align: Available via WSL")
+    logger.info(f"  WSL: {WSL_DISTRO if WSL_AVAILABLE else 'Unavailable'}")
+    logger.info(f"  TM-align: {'Available via WSL' if TMALIGN_AVAILABLE else 'Unavailable (degraded mode)'}")
     if CHIMERAX_AVAILABLE:
         logger.info(f"  ChimeraX: Available (visualization enabled)")
     else:
