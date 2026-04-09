@@ -43,9 +43,8 @@ def execute_reserved_job(job_id: str) -> None:
         job = db.get(HostedJob, job_id)
         if not job:
             return
-        request = JobCreateRequest.model_validate_json(
-            open(job.input_path, encoding="utf-8").read()
-        )
+        with open(job.input_path, encoding="utf-8") as handle:
+            request = JobCreateRequest.model_validate_json(handle.read())
         run_job(db, job, request)
 
 

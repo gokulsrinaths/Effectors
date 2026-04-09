@@ -21,6 +21,10 @@ class Settings:
     smtp_starttls: bool
     worker_poll_interval: float
     execution_mode: str
+    max_upload_bytes: int
+    max_sequence_chars: int
+    max_job_attempts: int
+    admin_api_key: str | None
 
 
 def get_settings() -> Settings:
@@ -48,4 +52,8 @@ def get_settings() -> Settings:
         smtp_starttls=os.getenv("EFFECTOR_SMTP_STARTTLS", "true").lower() == "true",
         worker_poll_interval=float(os.getenv("EFFECTOR_WORKER_POLL_INTERVAL", "5")),
         execution_mode=os.getenv("EFFECTOR_EXECUTION_MODE", "local"),
+        max_upload_bytes=int(os.getenv("EFFECTOR_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024))),
+        max_sequence_chars=int(os.getenv("EFFECTOR_MAX_SEQUENCE_CHARS", "200000")),
+        max_job_attempts=int(os.getenv("EFFECTOR_MAX_JOB_ATTEMPTS", "2")),
+        admin_api_key=os.getenv("EFFECTOR_ADMIN_API_KEY"),
     )

@@ -13,6 +13,7 @@ from ..config import get_settings
 from ..db import get_db
 from ..models import HostedJob
 from ..schemas import JobCreateRequest, JobListResponse, JobResponse
+from ..security import require_admin_api_key
 from ..services.execution import describe_execution_mode
 from ..services.job_runner import run_job
 
@@ -35,6 +36,8 @@ def _serialize_job(job: HostedJob) -> JobResponse:
         summary=summary,
         error_message=job.error_message,
         backend_mode=job.backend_mode,
+        attempt_count=job.attempt_count,
+        max_attempts=job.max_attempts,
     )
 
 
@@ -60,6 +63,8 @@ def create_job(request: JobCreateRequest, db: Session = Depends(get_db)) -> JobR
         )
     if not request.sequence:
         raise HTTPException(status_code=400, detail="Sequence input is required for sequence jobs.")
+    if len(request.sequence) > settings.max_sequence_chars:
+        raise HTTPException(status_code=400, detail="Sequence input exceeds the configured maximum length.")
 
     job_id = uuid4().hex
     input_path = _write_request_payload(job_id, request.model_dump())
@@ -71,6 +76,7 @@ def create_job(request: JobCreateRequest, db: Session = Depends(get_db)) -> JobR
         status="queued",
         input_path=str(input_path),
         backend_mode=describe_execution_mode()["mode"],
+        max_attempts=settings.max_job_attempts,
     )
     db.add(job)
     db.commit()
@@ -95,8 +101,11 @@ async def create_upload_job(
 
     job_id = uuid4().hex
     original_filename = file.filename or f"{input_type}.dat"
+    file_bytes = await file.read()
+    if len(file_bytes) > settings.max_upload_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file exceeds the configured maximum size.")
     staged_path = settings.uploads_dir / f"{job_id}_{original_filename}"
-    staged_path.write_bytes(await file.read())
+    staged_path.write_bytes(file_bytes)
 
     payload = {
         "input_type": input_type,
@@ -113,6 +122,7 @@ async def create_upload_job(
         status="queued",
         input_path=input_path,
         backend_mode=describe_execution_mode()["mode"],
+        max_attempts=settings.max_job_attempts,
     )
     db.add(job)
     db.commit()
@@ -120,7 +130,7 @@ async def create_upload_job(
     return _serialize_job(job)
 
 
-@router.get("", response_model=JobListResponse)
+@router.get("", response_model=JobListResponse, dependencies=[Depends(require_admin_api_key)])
 def list_jobs(db: Session = Depends(get_db)) -> JobListResponse:
     jobs = db.query(HostedJob).order_by(HostedJob.created_at.desc()).all()
     return JobListResponse(items=[_serialize_job(job) for job in jobs])
@@ -129,14 +139,6 @@ def list_jobs(db: Session = Depends(get_db)) -> JobListResponse:
 @router.get("/mode")
 def get_mode() -> dict:
     return describe_execution_mode()
-
-
-@router.get("/{job_id}", response_model=JobResponse)
-def get_job(job_id: str, db: Session = Depends(get_db)) -> JobResponse:
-    job = db.get(HostedJob, job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
-    return _serialize_job(job)
 
 
 @router.get("/results/{job_id}")
@@ -153,7 +155,15 @@ def get_result(job_id: str, db: Session = Depends(get_db)) -> dict:
     return json.loads(result_path.read_text(encoding="utf-8"))
 
 
-@router.post("/{job_id}/run", response_model=JobResponse)
+@router.get("/{job_id}", response_model=JobResponse)
+def get_job(job_id: str, db: Session = Depends(get_db)) -> JobResponse:
+    job = db.get(HostedJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    return _serialize_job(job)
+
+
+@router.post("/{job_id}/run", response_model=JobResponse, dependencies=[Depends(require_admin_api_key)])
 def run_job_now(job_id: str, db: Session = Depends(get_db)) -> JobResponse:
     """Local demo trigger for the hosted scaffold.
 

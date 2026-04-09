@@ -24,3 +24,5 @@ class HostedJob(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     backend_mode: Mapped[str] = mapped_column(Text, nullable=False, default="local")
     worker_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(nullable=False, default=2)

@@ -23,9 +23,9 @@ def run_job(db: Session, job: HostedJob, request: JobCreateRequest) -> HostedJob
     """
     settings = get_settings()
     job.backend_mode = resolve_execution_mode()
-
     job.status = "running"
     job.started_at = datetime.utcnow()
+    job.attempt_count += 1
     db.commit()
     db.refresh(job)
 
@@ -63,9 +63,12 @@ def run_job(db: Session, job: HostedJob, request: JobCreateRequest) -> HostedJob
             )
         return job
     except Exception as exc:  # noqa: BLE001
-        job.status = "failed"
         job.completed_at = datetime.utcnow()
         job.error_message = str(exc)
+        if job.attempt_count < job.max_attempts:
+            job.status = "queued"
+        else:
+            job.status = "failed"
         db.commit()
         db.refresh(job)
         return job

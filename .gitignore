@@ -56,3 +56,9 @@ Thumbs.db
 tmp/
 temp/
 
+# Hosted API runtime data
+backend/hosted_api/data/
+
+# Local validation scratch
+chimerax_validate_*/
+

@@ -45,6 +45,8 @@ py -3 -m hosted_api.worker
 - `GET /jobs`
 - `GET /jobs/{job_id}`
 - `GET /jobs/results/{job_id}`
+- `GET /jobs/mode`
+- `GET /health`
 - `POST /jobs/{job_id}/run`
 
 `POST /jobs/{job_id}/run` is an explicit local demo trigger for now. In the real
@@ -57,3 +59,4 @@ hosted product this should be called by a worker, not by a browser.
   through the same adapter contract
 - Email delivery uses SMTP if configured, otherwise writes a local preview file
 - Worker polling and execution mode are configured through `.env.example`
+- Upload size, sequence length, retry count, and optional admin-key protection are configurable

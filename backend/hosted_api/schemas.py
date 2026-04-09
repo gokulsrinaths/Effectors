@@ -35,6 +35,8 @@ class JobResponse(BaseModel):
     summary: dict[str, Any] | None = None
     error_message: str | None = None
     backend_mode: str
+    attempt_count: int
+    max_attempts: int
 
 
 class JobListResponse(BaseModel):

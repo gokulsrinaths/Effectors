@@ -186,6 +186,7 @@ Primary endpoints:
 - `GET /jobs/{job_id}`
 - `GET /jobs/results/{job_id}`
 - `GET /jobs/mode`
+- `GET /health`
 
 Flow:
 
@@ -365,6 +366,10 @@ If ChimeraX is available, uploaded PDB files can produce cached images under
 - Staged uploads and result retrieval
 - SMTP-ready email layer with preview fallback
 - Linux backend deployment templates
+- Hosted runtime health endpoint
+- Upload-size and sequence-length guardrails
+- Retry-aware worker execution
+- Optional admin-key protection for selected hosted endpoints
 
 ### Next major steps
 
