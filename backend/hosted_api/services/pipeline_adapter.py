@@ -143,6 +143,26 @@ def run_real_pipeline(request_payload: dict[str, Any], result_path: Path) -> dic
     else:
         processing_result = _run_structure_or_fasta_job(engine, request_payload)
 
+    # ChimeraX headless rendering — generate a PNG of the best-match structure
+    structure_image_path: str | None = None
+    try:
+        from ..config import get_settings as _get_settings  # noqa: WPS433
+        from .chimerax_renderer import render_structure_png  # noqa: WPS433
+
+        first_result = (processing_result.get("results") or [{}])[0]
+        best_match_id = first_result.get("best_match_id")
+        if best_match_id:
+            pdb_path_str = engine._get_pdb_path_from_structure_name(best_match_id)
+            if pdb_path_str:
+                pdb_path = Path(pdb_path_str)
+                output_png = result_path.parent / "structure_preview.png"
+                settings = _get_settings()
+                if render_structure_png(pdb_path, output_png, settings.chimerax_bin):
+                    structure_image_path = str(output_png)
+    except Exception as _exc:
+        import logging as _log
+        _log.getLogger(__name__).warning("ChimeraX step failed: %s", _exc)
+
     alphafold_result: dict[str, Any] | None = None
     if request.input_type == "sequence" and request.run_alphafold:
         from .alphafold_runner import run_alphafold_prediction  # noqa: WPS433
@@ -161,6 +181,8 @@ def run_real_pipeline(request_payload: dict[str, Any], result_path: Path) -> dic
     }
     if alphafold_result is not None:
         result["alphafold"] = alphafold_result
+    if structure_image_path is not None:
+        result["structure_image_path"] = structure_image_path
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result

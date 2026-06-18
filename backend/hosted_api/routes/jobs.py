@@ -213,6 +213,21 @@ def get_result(
     return json.loads(result_path.read_text(encoding="utf-8"))
 
 
+@router.get("/files/{job_id}/structure-image")
+def get_structure_image(
+    job_id: str,
+    x_job_token: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    job = _get_job_with_access(db, job_id, x_job_token, x_api_key)
+    settings = get_settings()
+    image_path = settings.results_dir / f"{job.id}.structure.png"
+    if not image_path.exists():
+        raise HTTPException(status_code=404, detail=f"No structure image available for job: {job_id}")
+    return FileResponse(path=str(image_path), media_type="image/png", filename=image_path.name)
+
+
 @router.get("/files/{job_id}/alphafold")
 def get_alphafold_structure(
     job_id: str,

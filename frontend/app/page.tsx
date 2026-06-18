@@ -494,7 +494,7 @@ export default function Home() {
                 </thead>
                 <tbody>
                   {results.map((r, i) => (
-                    <ResultRow key={i} result={r} apiBase={HOSTED_API} />
+                    <ResultRow key={i} result={r} apiBase={HOSTED_API} jobId={jobInfo?.id} jobToken={jobInfo?.token} />
                   ))}
                 </tbody>
               </table>
@@ -514,8 +514,32 @@ export default function Home() {
 
 // ─── Result row ───────────────────────────────────────────────────────────────
 
-function ResultRow({ result, apiBase }: { result: ClassificationResult; apiBase: string }) {
+function ResultRow({
+  result,
+  apiBase,
+  jobId,
+  jobToken,
+}: {
+  result: ClassificationResult
+  apiBase: string
+  jobId?: string
+  jobToken?: string
+}) {
   const [expanded, setExpanded] = useState(false)
+  const [structureImgUrl, setStructureImgUrl] = useState<string | null>(null)
+  const [imgLoaded, setImgLoaded] = useState(false)
+
+  useEffect(() => {
+    if (!expanded || !jobId || !jobToken) return
+    if (structureImgUrl) return
+    const url = `${apiBase}/jobs/files/${jobId}/structure-image`
+    fetch(url, { headers: { 'x-job-token': jobToken } })
+      .then(res => {
+        if (!res.ok) return
+        res.blob().then(blob => setStructureImgUrl(URL.createObjectURL(blob)))
+      })
+      .catch(() => {})
+  }, [expanded, jobId, jobToken, apiBase, structureImgUrl])
 
   const classColor = (c: string) => {
     if (c.includes('Already in database')) return '#28a745'
@@ -571,6 +595,27 @@ function ResultRow({ result, apiBase }: { result: ClassificationResult; apiBase:
                     <li>RMSD: {result.tm_align_result.rmsd.toFixed(2)} Å</li>
                     <li>Alignment Length: {result.tm_align_result.alignment_length}</li>
                   </ul>
+                </div>
+              )}
+
+              {structureImgUrl && (
+                <div style={{ marginTop: 16 }}>
+                  <p style={{ fontSize: '0.8rem', color: '#6c757d', marginBottom: 6 }}>Structure preview</p>
+                  <img
+                    src={structureImgUrl}
+                    alt="Structure preview"
+                    style={{
+                      maxWidth: '100%',
+                      maxHeight: 360,
+                      borderRadius: 6,
+                      border: '1px solid #dee2e6',
+                      display: imgLoaded ? 'block' : 'none',
+                    }}
+                    onLoad={() => setImgLoaded(true)}
+                  />
+                  {!imgLoaded && (
+                    <div style={{ fontSize: '0.8rem', color: '#6c757d' }}>Loading preview…</div>
+                  )}
                 </div>
               )}
 

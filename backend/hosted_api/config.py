@@ -62,6 +62,7 @@ class Settings:
     hpc_python_bin: str
     alphafold_bin: str
     alphafold_args: str
+    chimerax_bin: str
 
 
 def _parse_origins(raw_value: str) -> tuple[str, ...]:
@@ -140,4 +141,5 @@ def get_settings() -> Settings:
         hpc_python_bin=os.getenv("EFFECTOR_HPC_PYTHON_BIN", "python3"),
         alphafold_bin=os.getenv("EFFECTOR_ALPHAFOLD_BIN", "colabfold_batch"),
         alphafold_args=os.getenv("EFFECTOR_ALPHAFOLD_ARGS", ""),
+        chimerax_bin=os.getenv("EFFECTOR_CHIMERAX_BIN", "chimerax"),
     )

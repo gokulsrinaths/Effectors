@@ -270,6 +270,15 @@ def refresh_hpc_job(job: HostedJob, local_result_path: Path) -> tuple[HostedJob,
             _copy_remote_file(remote_pdb_path, local_pdb_path)
             alphafold["pdb_local_path"] = str(local_pdb_path)
             payload["alphafold"] = alphafold
+        remote_image_path = payload.get("structure_image_path") if isinstance(payload, dict) else None
+        if remote_image_path:
+            local_image_path = local_result_path.parent / f"{job.id}.structure.png"
+            try:
+                _copy_remote_file(remote_image_path, local_image_path)
+                payload["structure_image_local_path"] = str(local_image_path)
+            except Exception:
+                pass  # rendering may have been skipped on HPC — not fatal
+        if alphafold or remote_image_path:
             local_result_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         job.status = "completed"
         job.result_path = str(local_result_path)
