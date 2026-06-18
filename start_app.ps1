@@ -46,22 +46,30 @@ Start-Sleep -Seconds 2
 Write-Host "Done." -ForegroundColor Green
 Write-Host ""
 
-Write-Host "[0.5/2] Checking backend dependencies..." -ForegroundColor Yellow
+Write-Host "[0.5/4] Checking backend dependencies..." -ForegroundColor Yellow
 Push-Location "$scriptDir\backend"
 try {
     Invoke-Expression "$pythonCmd -c `"import fastapi`"" 2>$null
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "Installing backend dependencies..." -ForegroundColor Yellow
-        Invoke-Expression "$pythonCmd -m pip install -q -r requirements.txt"
+        Write-Host "Installing demo backend dependencies..." -ForegroundColor Yellow
+        Invoke-Expression "$pythonCmd -m pip install --user -q -r requirements.txt"
+    }
+} catch {
+    Invoke-Expression "$pythonCmd -m pip install --user -q -r requirements.txt"
+}
+try {
+    Invoke-Expression "$pythonCmd -c `"import sqlalchemy`"" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Installing hosted API dependencies..." -ForegroundColor Yellow
+        Invoke-Expression "$pythonCmd -m pip install --user -q -r requirements-hosted.txt"
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "ERROR: Failed to install backend dependencies!" -ForegroundColor Red
+            Write-Host "ERROR: Failed to install hosted API dependencies!" -ForegroundColor Red
             Read-Host "Press Enter to exit"
             exit 1
         }
     }
 } catch {
-    Write-Host "Installing backend dependencies..." -ForegroundColor Yellow
-    Invoke-Expression "$pythonCmd -m pip install -q -r requirements.txt"
+    Invoke-Expression "$pythonCmd -m pip install --user -q -r requirements-hosted.txt"
 }
 Pop-Location
 Write-Host ""

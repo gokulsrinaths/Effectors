@@ -36,14 +36,19 @@ timeout /t 2 /nobreak >nul
 echo Done.
 echo.
 
-echo [0.5/2] Checking backend dependencies...
+echo [0.5/4] Checking backend dependencies...
 cd backend
 %PYTHON_CMD% -c "import fastapi" >nul 2>&1
 if errorlevel 1 (
-    echo Installing backend dependencies...
-    %PYTHON_CMD% -m pip install -q -r requirements.txt
+    echo Installing demo backend dependencies...
+    %PYTHON_CMD% -m pip install --user -q -r requirements.txt
+)
+%PYTHON_CMD% -c "import sqlalchemy" >nul 2>&1
+if errorlevel 1 (
+    echo Installing hosted API dependencies...
+    %PYTHON_CMD% -m pip install --user -q -r requirements-hosted.txt
     if errorlevel 1 (
-        echo ERROR: Failed to install backend dependencies!
+        echo ERROR: Failed to install hosted API dependencies!
         pause
         exit /b 1
     )
