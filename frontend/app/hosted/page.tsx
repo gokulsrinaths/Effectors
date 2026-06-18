@@ -6,7 +6,7 @@ import styles from './page.module.css'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 
-type JobStatus = 'queued' | 'reserved' | 'running' | 'completed' | 'failed'
+type JobStatus = 'queued' | 'reserved' | 'submitted' | 'running' | 'completed' | 'failed'
 
 interface HostedJob {
   id: string
@@ -16,11 +16,14 @@ interface HostedJob {
   created_at: string
   started_at?: string | null
   completed_at?: string | null
-  input_path: string
-  result_path?: string | null
   summary?: Record<string, unknown> | null
   error_message?: string | null
   backend_mode: string
+  has_result: boolean
+  poll_path: string
+  result_path?: string | null
+  access_token?: string | null
+  remote_job_id?: string | null
 }
 
 interface HostedResult {
@@ -36,9 +39,12 @@ export default function HostedPage() {
   const [uploadFile, setUploadFile] = useState<File | null>(null)
   const [job, setJob] = useState<HostedJob | null>(null)
   const [result, setResult] = useState<HostedResult | null>(null)
+  const [accessToken, setAccessToken] = useState('')
   const [message, setMessage] = useState('Create a hosted job, then let the worker process it.')
   const [submitting, setSubmitting] = useState(false)
   const [modeInfo, setModeInfo] = useState<Record<string, unknown> | null>(null)
+  const [runAlphafold, setRunAlphafold] = useState(false)
+  const [downloading, setDownloading] = useState(false)
 
   const jobIsTerminal = useMemo(() => {
     return job?.status === 'completed' || job?.status === 'failed'
@@ -59,10 +65,14 @@ export default function HostedPage() {
 
     const interval = window.setInterval(async () => {
       try {
-        const response = await axios.get<HostedJob>(`${API_BASE_URL}/jobs/${job.id}`)
+        const response = await axios.get<HostedJob>(`${API_BASE_URL}${job.poll_path}`, {
+          headers: accessToken ? { 'x-job-token': accessToken } : undefined,
+        })
         setJob(response.data)
-        if (response.data.status === 'completed') {
-          const resultResponse = await axios.get<HostedResult>(`${API_BASE_URL}/jobs/results/${job.id}`)
+        if (response.data.status === 'completed' && response.data.result_path) {
+          const resultResponse = await axios.get<HostedResult>(`${API_BASE_URL}${response.data.result_path}`, {
+            headers: accessToken ? { 'x-job-token': accessToken } : undefined,
+          })
           setResult(resultResponse.data)
           setMessage('Job completed. Review the condensed result and raw payload below.')
         } else if (response.data.status === 'failed') {
@@ -74,7 +84,7 @@ export default function HostedPage() {
     }, 3000)
 
     return () => window.clearInterval(interval)
-  }, [job, jobIsTerminal])
+  }, [accessToken, job, jobIsTerminal])
 
   const handleSequenceSubmit = async () => {
     if (!sequence.trim()) {
@@ -90,9 +100,11 @@ export default function HostedPage() {
         email: email || undefined,
         sequence: sequence.trim(),
         sequence_id: sequenceId || undefined,
+        run_alphafold: runAlphafold,
       })
       setJob(response.data)
-      setMessage(`Created sequence job ${response.data.id}. Start the worker or use the run button.`)
+      setAccessToken(response.data.access_token || '')
+      setMessage(`Created sequence job ${response.data.id}. The worker will pick it up automatically.`)
     } catch (error: any) {
       setMessage(error?.response?.data?.detail || error?.message || 'Failed to create sequence job.')
     } finally {
@@ -120,7 +132,8 @@ export default function HostedPage() {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
       setJob(response.data)
-      setMessage(`Created ${uploadType} job ${response.data.id}. Start the worker or use the run button.`)
+      setAccessToken(response.data.access_token || '')
+      setMessage(`Created ${uploadType} job ${response.data.id}. The worker will pick it up automatically.`)
     } catch (error: any) {
       setMessage(error?.response?.data?.detail || error?.message || 'Failed to create upload job.')
     } finally {
@@ -128,23 +141,34 @@ export default function HostedPage() {
     }
   }
 
-  const handleRunNow = async () => {
-    if (!job) {
+  const downloadAlphafoldPdb = async () => {
+    if (!job) return
+    if (!accessToken) {
+      setMessage('Missing job access token. Re-create the job and retry.')
       return
     }
+
+    setDownloading(true)
     try {
-      setMessage(`Triggering job ${job.id} manually.`)
-      const response = await axios.post<HostedJob>(`${API_BASE_URL}/jobs/${job.id}/run`)
-      setJob(response.data)
-      if (response.data.status === 'completed') {
-        const resultResponse = await axios.get<HostedResult>(`${API_BASE_URL}/jobs/results/${job.id}`)
-        setResult(resultResponse.data)
-        setMessage('Job completed immediately.')
-      }
+      const response = await axios.get(`${API_BASE_URL}/jobs/files/${job.id}/alphafold`, {
+        headers: { 'x-job-token': accessToken },
+        responseType: 'blob',
+      })
+      const blobUrl = window.URL.createObjectURL(response.data)
+      const link = document.createElement('a')
+      link.href = blobUrl
+      link.download = `${job.id}.alphafold.pdb`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(blobUrl)
     } catch (error: any) {
-      setMessage(error?.response?.data?.detail || error?.message || 'Failed to run job.')
+      setMessage(error?.response?.data?.detail || error?.message || 'Failed to download AlphaFold PDB.')
+    } finally {
+      setDownloading(false)
     }
   }
+
 
   return (
     <div className={styles.container}>
@@ -182,6 +206,16 @@ export default function HostedPage() {
                 onChange={(e) => setSequence(e.target.value)}
                 placeholder="Paste protein sequence or FASTA-formatted single sequence"
               />
+            </div>
+            <div className={styles.field}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={runAlphafold}
+                  onChange={(e) => setRunAlphafold(e.target.checked)}
+                />{' '}
+                Run AlphaFold (HPC)
+              </label>
             </div>
             <div className={styles.buttonRow}>
               <button className={styles.button} disabled={submitting} onClick={handleSequenceSubmit}>
@@ -228,16 +262,10 @@ export default function HostedPage() {
               <div className={styles.statusLine}>job_id={job.id}</div>
               <div className={styles.statusLine}>status={job.status as JobStatus}</div>
               <div className={styles.statusLine}>backend_mode={job.backend_mode}</div>
+              {job.remote_job_id && <div className={styles.statusLine}>remote_job_id={job.remote_job_id}</div>}
               <div className={styles.statusLine}>created_at={job.created_at}</div>
               {job.started_at && <div className={styles.statusLine}>started_at={job.started_at}</div>}
               {job.completed_at && <div className={styles.statusLine}>completed_at={job.completed_at}</div>}
-              {!jobIsTerminal && (
-                <div className={styles.buttonRow}>
-                  <button className={styles.secondaryButton} onClick={handleRunNow}>
-                    Run Now Without Worker
-                  </button>
-                </div>
-              )}
             </>
           )}
         </section>
@@ -247,6 +275,13 @@ export default function HostedPage() {
             <h2>Result Summary</h2>
             {job?.summary && (
               <pre>{JSON.stringify(job.summary, null, 2)}</pre>
+            )}
+            {job?.status === 'completed' && (
+              <div className={styles.buttonRow}>
+                <button className={styles.button} disabled={downloading} onClick={downloadAlphafoldPdb}>
+                  {downloading ? 'Downloading…' : 'Download AlphaFold PDB'}
+                </button>
+              </div>
             )}
             {result && (
               <>

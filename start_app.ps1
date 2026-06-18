@@ -10,6 +10,15 @@ Write-Host ""
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptDir
 
+function Get-PreferredPython {
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        return "py -3.12"
+    }
+    return "python"
+}
+
+$pythonCmd = Get-PreferredPython
+
 # Check if backend exists
 if (-not (Test-Path "backend\main.py")) {
     Write-Host "ERROR: backend\main.py not found!" -ForegroundColor Red
@@ -40,10 +49,10 @@ Write-Host ""
 Write-Host "[0.5/2] Checking backend dependencies..." -ForegroundColor Yellow
 Push-Location "$scriptDir\backend"
 try {
-    python -c "import fastapi" 2>$null
+    Invoke-Expression "$pythonCmd -c `"import fastapi`"" 2>$null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Installing backend dependencies..." -ForegroundColor Yellow
-        python -m pip install -q -r requirements.txt
+        Invoke-Expression "$pythonCmd -m pip install -q -r requirements.txt"
         if ($LASTEXITCODE -ne 0) {
             Write-Host "ERROR: Failed to install backend dependencies!" -ForegroundColor Red
             Read-Host "Press Enter to exit"
@@ -52,7 +61,7 @@ try {
     }
 } catch {
     Write-Host "Installing backend dependencies..." -ForegroundColor Yellow
-    python -m pip install -q -r requirements.txt
+    Invoke-Expression "$pythonCmd -m pip install -q -r requirements.txt"
 }
 Pop-Location
 Write-Host ""
@@ -63,7 +72,7 @@ Write-Host "API Docs: http://localhost:8000/docs" -ForegroundColor Gray
 Write-Host ""
 
 # Start backend in new window
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$scriptDir\backend'; python main.py"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$scriptDir\backend'; $pythonCmd main.py"
 
 # Wait for backend to start
 Start-Sleep -Seconds 3

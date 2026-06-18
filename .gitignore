@@ -60,5 +60,24 @@ temp/
 backend/hosted_api/data/
 
 # Local validation scratch
-chimerax_validate_*/
+
+# SSH keys / certs (never commit)
+*_key/
+medicinebow_ssh_tmp/
+
+# Local logs / probes
+backend_start.*
+*.err
+ps_probe/
+probe_*/
+
+# Scratch / local-only
+fork_test_child.js
+fork_test_child2.js
+test.slurm
+memory.md
+.node/
+SKILLS/
+gokulsrinathseetharam/
+medicinebow_workflow_staging/
 

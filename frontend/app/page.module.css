@@ -194,6 +194,81 @@
   background-color: #f8f9fa;
 }
 
+.stepsContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stepRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  transition: all 0.3s ease;
+}
+
+.stepRow.pending {
+  opacity: 0.5;
+}
+
+.stepRow.active {
+  background-color: rgba(0, 102, 204, 0.08);
+  border: 1px solid rgba(0, 102, 204, 0.2);
+}
+
+.stepRow.done {
+  background-color: rgba(40, 167, 69, 0.08);
+}
+
+.stepIcon {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.stepSpinner {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #dee2e6;
+  border-top-color: #0066cc;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.stepDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background-color: #dee2e6;
+}
+
+.stepLabel {
+  font-size: 0.95rem;
+  color: #212529;
+}
+
+.stepRow.active .stepLabel {
+  font-weight: 600;
+  color: #0066cc;
+}
+
+.stepRow.done .stepLabel {
+  color: #28a745;
+}
+
+.statusMessage {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #dee2e6;
+  font-size: 0.9rem;
+  color: #6c757d;
+  font-style: italic;
+}
+
 .statusContent {
   display: flex;
   align-items: center;

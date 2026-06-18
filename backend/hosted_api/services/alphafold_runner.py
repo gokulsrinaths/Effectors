@@ -1,0 +1,93 @@
+"""AlphaFold/ColabFold execution helpers for HPC jobs.
+
+The hosted scaffold supports running AlphaFold-like tools remotely via Slurm.
+We intentionally keep this as a thin wrapper around an external binary so the
+cluster environment (modules/conda) can be managed in the Slurm prologue.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import shlex
+import subprocess
+
+
+def _write_fasta(sequence_id: str, sequence: str, fasta_path: Path) -> None:
+    fasta_path.parent.mkdir(parents=True, exist_ok=True)
+    fasta_path.write_text(f">{sequence_id}\n{sequence.strip()}\n", encoding="utf-8")
+
+
+def _pick_predicted_pdb(output_dir: Path) -> Path | None:
+    if not output_dir.exists():
+        return None
+    candidates = sorted(output_dir.rglob("*.pdb"))
+    return candidates[0] if candidates else None
+
+
+def run_alphafold_prediction(*, sequence_id: str, sequence: str, output_dir: Path) -> dict:
+    """Run an AlphaFold-like prediction using an external CLI.
+
+    Default assumes ColabFold is installed and available as `colabfold_batch`.
+    Configure via env vars inside the Slurm job environment:
+
+    - EFFECTOR_ALPHAFOLD_BIN (default: colabfold_batch)
+    - EFFECTOR_ALPHAFOLD_ARGS (optional additional args)
+    """
+    alphafold_bin = os.getenv("EFFECTOR_ALPHAFOLD_BIN", "colabfold_batch")
+    extra_args = os.getenv("EFFECTOR_ALPHAFOLD_ARGS", "").strip()
+
+    fasta_path = output_dir / f"{sequence_id}.fasta"
+    _write_fasta(sequence_id, sequence, fasta_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    cmd = [alphafold_bin, str(fasta_path), str(output_dir)]
+    if extra_args:
+        cmd.extend(shlex.split(extra_args))
+
+    try:
+        completed = subprocess.run(
+            cmd,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+    except FileNotFoundError as exc:
+        return {
+            "requested": True,
+            "status": "failed",
+            "tool": alphafold_bin,
+            "output_dir": str(output_dir),
+            "error_message": f"AlphaFold binary not found: {exc}",
+        }
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        stdout = (exc.stdout or "").strip()
+        message = stderr or stdout or str(exc)
+        return {
+            "requested": True,
+            "status": "failed",
+            "tool": alphafold_bin,
+            "output_dir": str(output_dir),
+            "error_message": message,
+        }
+
+    predicted = _pick_predicted_pdb(output_dir)
+    if not predicted:
+        return {
+            "requested": True,
+            "status": "failed",
+            "tool": alphafold_bin,
+            "output_dir": str(output_dir),
+            "error_message": "AlphaFold run completed but no PDB output was found.",
+        }
+
+    return {
+        "requested": True,
+        "status": "completed",
+        "tool": alphafold_bin,
+        "output_dir": str(output_dir),
+        "pdb_remote_path": str(predicted),
+        "stdout": (completed.stdout or "").strip(),
+    }
+

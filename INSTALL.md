@@ -6,6 +6,7 @@ This guide will help you install BLAST+ and TMalign to enable full functionality
 
 - Python 3.8+ (already installed)
 - Windows 10/11 (current system)
+- Node.js **22 LTS** (recommended) or **20 LTS** (for the frontend)
 
 ## Step 1: Install BLAST+
 
@@ -132,6 +133,16 @@ python main.py
 - Check backend logs for detailed error messages
 - Verify binaries are executable (not blocked by Windows)
 - Try running binaries directly from command line
+
+### Frontend `next dev` fails with `Error: spawn EPERM`
+- This usually means your Node.js version can't `fork()` child processes on your Windows setup.
+- Use Node.js **22 LTS** (recommended) or **20 LTS** (avoid Node.js 24+), then reinstall frontend deps:
+  ```powershell
+  cd frontend
+  Remove-Item -Recurse -Force node_modules,package-lock.json
+  npm install
+  npm run dev
+  ```
 
 ## Quick Test
 

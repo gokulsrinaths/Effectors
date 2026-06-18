@@ -9,6 +9,10 @@ echo.
 REM Get the directory where this script is located
 cd /d "%~dp0"
 
+set "PYTHON_CMD=py -3.12"
+where py >nul 2>&1
+if errorlevel 1 set "PYTHON_CMD=python"
+
 REM Check if backend directory exists
 if not exist "backend\main.py" (
     echo ERROR: backend\main.py not found!
@@ -34,10 +38,10 @@ echo.
 
 echo [0.5/2] Checking backend dependencies...
 cd backend
-python -c "import fastapi" >nul 2>&1
+%PYTHON_CMD% -c "import fastapi" >nul 2>&1
 if errorlevel 1 (
     echo Installing backend dependencies...
-    python -m pip install -q -r requirements.txt
+    %PYTHON_CMD% -m pip install -q -r requirements.txt
     if errorlevel 1 (
         echo ERROR: Failed to install backend dependencies!
         pause
@@ -51,7 +55,7 @@ echo [1/2] Starting Backend Server...
 echo Backend will be available at: http://localhost:8000
 echo API Docs: http://localhost:8000/docs
 echo.
-start "Effector Pipeline - Backend" cmd /k "cd /d %~dp0backend && python main.py"
+start "Effector Pipeline - Backend" cmd /k "cd /d %~dp0backend && %PYTHON_CMD% main.py"
 
 REM Wait a moment for backend to start
 timeout /t 3 /nobreak >nul

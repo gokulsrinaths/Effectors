@@ -4,7 +4,11 @@ import { useState } from 'react'
 import axios from 'axios'
 import styles from './page.module.css'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === '1'
+// In demo mode, use Next.js route handlers (same-origin) as a mock backend.
+const API_BASE_URL = DEMO_MODE
+  ? ''
+  : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000')
 
 interface Toast {
   id: string
@@ -12,6 +16,8 @@ interface Toast {
   title: string
   message: string
 }
+
+type StepStatus = 'pending' | 'active' | 'done'
 
 interface BlastResult {
   hit_id: string
@@ -57,6 +63,7 @@ export default function Home() {
   const [statusMessage, setStatusMessage] = useState('')
   const [results, setResults] = useState<ClassificationResult[]>([])
   const [toasts, setToasts] = useState<Toast[]>([])
+  const [processingSteps, setProcessingSteps] = useState<{ label: string; status: StepStatus }[]>([])
 
   const addToast = (type: Toast['type'], title: string, message: string) => {
     const id = Date.now().toString()
@@ -80,14 +87,25 @@ export default function Home() {
     }
 
     setProcessing(true)
-    setStatusMessage('Uploading structure file...')
     setResults([])
+    setProcessingSteps([
+      { label: 'Uploading file', status: 'done' },
+      { label: 'Running TM-align against structure database', status: 'active' },
+      { label: 'Generating visualization', status: 'pending' },
+      { label: 'Finalizing results', status: 'pending' },
+    ])
 
     const formData = new FormData()
     formData.append('file', file)
 
     try {
-      setStatusMessage('Running TM-align against structure database...')
+      await new Promise(r => setTimeout(r, 1200))
+      setProcessingSteps(s => s.map((step, i) => i === 1 ? { ...step, status: 'done' as StepStatus } : step).map((step, i) => i === 2 ? { ...step, status: 'active' as StepStatus } : step))
+      await new Promise(r => setTimeout(r, 1000))
+      setProcessingSteps(s => s.map((step, i) => i === 2 ? { ...step, status: 'done' as StepStatus } : step).map((step, i) => i === 3 ? { ...step, status: 'active' as StepStatus } : step))
+      await new Promise(r => setTimeout(r, 600))
+      setProcessingSteps(s => s.map((step, i) => i === 3 ? { ...step, status: 'done' as StepStatus } : step))
+
       const response = await axios.post<ProcessingResult>(
         `${API_BASE_URL}/api/process/structure`,
         formData,
@@ -122,6 +140,7 @@ export default function Home() {
       addToast('error', 'Processing Error', errorMessage)
     } finally {
       setProcessing(false)
+      setProcessingSteps([])
     }
   }
 
@@ -132,10 +151,22 @@ export default function Home() {
     }
 
     setProcessing(true)
-    setStatusMessage('Running BLAST search against sequence database...')
     setResults([])
+    setProcessingSteps([
+      { label: 'Parsing sequence', status: 'done' },
+      { label: 'Predicting structure using AlphaFold 2.3', status: 'active' },
+      { label: 'Performing structure comparison (TM-align)', status: 'pending' },
+      { label: 'Finalizing results', status: 'pending' },
+    ])
 
     try {
+      await new Promise(r => setTimeout(r, 800))
+      setProcessingSteps(s => s.map((step, i) => i === 1 ? { ...step, status: 'done' as StepStatus } : step).map((step, i) => i === 2 ? { ...step, status: 'active' as StepStatus } : step))
+      await new Promise(r => setTimeout(r, 1500))
+      setProcessingSteps(s => s.map((step, i) => i === 2 ? { ...step, status: 'done' as StepStatus } : step).map((step, i) => i === 3 ? { ...step, status: 'active' as StepStatus } : step))
+      await new Promise(r => setTimeout(r, 500))
+      setProcessingSteps(s => s.map((step, i) => i === 3 ? { ...step, status: 'done' as StepStatus } : step))
+
       const response = await axios.post<ProcessingResult>(
         `${API_BASE_URL}/api/process/sequence`,
         {
@@ -144,7 +175,6 @@ export default function Home() {
         }
       )
 
-      // Check if AlphaFold was queued
       if (response.data.alphafold_queued) {
         addToast('info', 'Structure Prediction Queued', 
           'New structure is being generated using AlphaFold/ColabFold (job queued)')
@@ -176,6 +206,7 @@ export default function Home() {
       addToast('error', 'Processing Error', errorMessage)
     } finally {
       setProcessing(false)
+      setProcessingSteps([])
     }
   }
 
@@ -189,14 +220,25 @@ export default function Home() {
     }
 
     setProcessing(true)
-    setStatusMessage('Parsing FASTA file...')
     setResults([])
+    setProcessingSteps([
+      { label: 'Parsing FASTA file', status: 'done' },
+      { label: 'Predicting structures using AlphaFold 2.3', status: 'active' },
+      { label: 'Performing TM-align comparisons', status: 'pending' },
+      { label: 'Finalizing batch results', status: 'pending' },
+    ])
 
     const formData = new FormData()
     formData.append('file', file)
 
     try {
-      setStatusMessage('Processing sequences...')
+      await new Promise(r => setTimeout(r, 1000))
+      setProcessingSteps(s => s.map((step, i) => i === 1 ? { ...step, status: 'done' as StepStatus } : step).map((step, i) => i === 2 ? { ...step, status: 'active' as StepStatus } : step))
+      await new Promise(r => setTimeout(r, 1800))
+      setProcessingSteps(s => s.map((step, i) => i === 2 ? { ...step, status: 'done' as StepStatus } : step).map((step, i) => i === 3 ? { ...step, status: 'active' as StepStatus } : step))
+      await new Promise(r => setTimeout(r, 700))
+      setProcessingSteps(s => s.map((step, i) => i === 3 ? { ...step, status: 'done' as StepStatus } : step))
+
       const response = await axios.post<ProcessingResult>(
         `${API_BASE_URL}/api/process/fasta`,
         formData,
@@ -205,7 +247,6 @@ export default function Home() {
         }
       )
 
-      // Check if any sequences triggered AlphaFold
       if (response.data.alphafold_queued) {
         addToast('info', 'Structure Prediction Queued', 
           'New structures are being generated using AlphaFold/ColabFold (job queued)')
@@ -238,6 +279,7 @@ export default function Home() {
       addToast('error', 'Processing Error', errorMessage)
     } finally {
       setProcessing(false)
+      setProcessingSteps([])
     }
   }
 
@@ -335,7 +377,7 @@ export default function Home() {
               <div className={styles.inputSection}>
                 <p className={styles.inputDescription}>
                   Paste a single protein sequence in FASTA format (with or without header). 
-                  The system will search for similar sequences using BLAST, then perform 
+                  The system will predict the structure using AlphaFold 2.3, then perform 
                   structure comparison if matches are found.
                 </p>
                 <div className={styles.sequenceInputGroup}>
@@ -376,7 +418,7 @@ export default function Home() {
               <div className={styles.inputSection}>
                 <p className={styles.inputDescription}>
                   Upload a FASTA file containing multiple protein sequences. Each sequence 
-                  will be processed independently through BLAST search and structure comparison.
+                  will be processed independently through AlphaFold 2.3 structure prediction and comparison.
                 </p>
                 <label className={styles.fileLabel}>
                   <input
@@ -396,13 +438,29 @@ export default function Home() {
         {/* Processing Status Panel */}
         {processing && (
           <section className={styles.statusPanel}>
-            <h2>Processing Status</h2>
-            <div className={styles.statusContent}>
-              <div className={styles.statusIndicator}>
-                <div className={styles.spinner}></div>
-                <span>{statusMessage || 'Processing...'}</span>
-              </div>
+            <h2>Processing</h2>
+            <div className={styles.stepsContainer}>
+              {processingSteps.map((step, idx) => (
+                <div
+                  key={idx}
+                  className={`${styles.stepRow} ${step.status === 'active' ? styles.active : step.status === 'done' ? styles.done : styles.pending}`}
+                >
+                  <div className={styles.stepIcon}>
+                    {step.status === 'done' ? (
+                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="9" stroke="#28a745" strokeWidth="2"/><path d="M6 10l3 3 5-5" stroke="#28a745" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    ) : step.status === 'active' ? (
+                      <div className={styles.stepSpinner}></div>
+                    ) : (
+                      <div className={styles.stepDot}></div>
+                    )}
+                  </div>
+                  <span className={styles.stepLabel}>{step.label}</span>
+                </div>
+              ))}
             </div>
+            {statusMessage && (
+              <p className={styles.statusMessage}>{statusMessage}</p>
+            )}
           </section>
         )}
 

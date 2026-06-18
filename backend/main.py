@@ -11,10 +11,9 @@ External tools are resolved via PATH for portability.
 This design supports Windows dev and Linux/HPC deployment.
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, File, UploadFile, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional, Tuple
 import subprocess
@@ -28,6 +27,8 @@ import logging
 import re
 import shutil
 from datetime import datetime
+import asyncio
+import threading
 
 # Configure logging
 logging.basicConfig(
@@ -95,36 +96,12 @@ class StatusResponse(BaseModel):
     structure_db: dict
 
 
-class VisualizationRequest(BaseModel):
-    """Request model for protein visualization"""
-    pdb_path: str
-
-
-class VisualizationResponse(BaseModel):
-    """Response model for protein visualization"""
-    available: bool
-    image: Optional[str] = None
-    success: Optional[bool] = None
-    error: Optional[str] = None
-    cached: Optional[bool] = None
-
-
 # Database paths
 BASE_DIR = pathlib.Path(__file__).parent.parent
 STRUCTURE_DB_PATH = BASE_DIR / "Database"
 SEQUENCE_DB_PATH = BASE_DIR / "effector_sequences.fasta"
 # Use underscore to avoid space issues with makeblastdb
 SEQUENCE_DB_INDEX_PATH = BASE_DIR / "effector_sequences"
-
-# Visualization output directory
-VISUALIZATION_DIR = BASE_DIR / "static" / "visualizations"
-VISUALIZATION_DIR.mkdir(parents=True, exist_ok=True)
-
-# Mount static files for visualizations (must be after BASE_DIR is defined)
-# Create static directory structure
-static_dir = BASE_DIR / "static"
-static_dir.mkdir(exist_ok=True)
-app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 # Cache for TM-align results: key = (query_hash, target_filename), value = dict with tm_score, rmsd
 _tmalign_cache = {}
@@ -134,32 +111,15 @@ _structure_files_cache = None
 
 # In-memory registry for completed jobs returned by the synchronous frontend API.
 _job_store = {}
+_job_store_lock = threading.Lock()
 
 # Binary paths (detected at startup)
 BLASTP_PATH = None
 MAKEBLASTDB_PATH = None
+TMALIGN_PATH = None
 WSL_AVAILABLE = False
 WSL_DISTRO = None
 TMALIGN_AVAILABLE = False
-
-# ChimeraX availability (validated on startup)
-CHIMERAX_AVAILABLE = False
-
-# Import ChimeraX utilities (will be validated on startup)
-try:
-    from utils.chimerax_render import render_protein
-    from utils.validate_chimerax import validate_chimerax
-    from config.chimerax import is_chimerax_available
-    CHIMERAX_MODULES_LOADED = True
-except ImportError as e:
-    logger.warning(f"ChimeraX modules not available: {e}")
-    CHIMERAX_MODULES_LOADED = False
-    def render_protein(*args, **kwargs):
-        return {"image": None, "success": False, "error": "ChimeraX modules not available"}
-    def validate_chimerax():
-        return False
-    def is_chimerax_available():
-        return False
 
 
 def windows_to_wsl_path(windows_path: str) -> str:
@@ -251,6 +211,30 @@ def check_wsl_available() -> Tuple[bool, Optional[str]]:
     return False, None
 
 
+def check_tmalign_native() -> Optional[str]:
+    """Check whether a native structure-alignment binary is available and executable."""
+    for binary_name in ("TMalign", "USalign"):
+        binary_path = check_binary(binary_name)
+        if not binary_path:
+            continue
+
+        try:
+            result = subprocess.run(
+                [binary_path, '-h'],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False
+            )
+            combined_output = f"{result.stdout}\n{result.stderr}"
+            if "TM-align" in combined_output or "US-align" in combined_output or "Usage" in combined_output or result.returncode == 0:
+                return binary_path
+            logger.warning(f"Native structure-alignment probe returned unexpected output from {binary_path}")
+        except Exception as e:
+            logger.warning(f"Native structure-alignment probe failed for {binary_path}: {e}")
+    return None
+
+
 def check_tmalign_via_wsl() -> bool:
     """
     Check if TMalign is available via WSL.
@@ -267,13 +251,10 @@ def check_tmalign_via_wsl() -> bool:
                 timeout=timeout_seconds,
                 check=False
             )
-            # TMalign typically returns non-zero exit code but shows usage
-            if 'TM-align' in result.stdout or 'TM-align' in result.stderr:
+            combined_output = f"{result.stdout}\n{result.stderr}"
+            # TMalign typically returns non-zero exit code but shows usage/help text.
+            if 'TM-align' in combined_output:
                 logger.info("TMalign available via WSL")
-                return True
-            # Also check if command executed (even if output format is different)
-            if result.returncode == 0 or (result.stdout and len(result.stdout) > 0):
-                logger.info("TMalign command executed successfully")
                 return True
         except subprocess.TimeoutExpired:
             if attempt < 2:
@@ -336,6 +317,84 @@ def compute_file_hash(file_path: str) -> str:
     except Exception as e:
         logger.warning(f"Failed to compute hash for {file_path}: {e}")
         return ""
+
+
+_AA3_TO_1 = {
+    "ALA": "A",
+    "ARG": "R",
+    "ASN": "N",
+    "ASP": "D",
+    "CYS": "C",
+    "GLN": "Q",
+    "GLU": "E",
+    "GLY": "G",
+    "HIS": "H",
+    "ILE": "I",
+    "LEU": "L",
+    "LYS": "K",
+    "MET": "M",
+    "PHE": "F",
+    "PRO": "P",
+    "SER": "S",
+    "THR": "T",
+    "TRP": "W",
+    "TYR": "Y",
+    "VAL": "V",
+    # Common ambiguous/modified residues -> X
+    "ASX": "B",
+    "GLX": "Z",
+    "SEC": "U",
+    "PYL": "O",
+}
+
+
+def extract_sequence_from_pdb(pdb_path: str, max_len: int = 5000) -> str:
+    """
+    Best-effort sequence extraction from a PDB/mmCIF file for degraded-mode demos.
+
+    Preference order:
+    1) SEQRES records (PDB) if present
+    2) ATOM backbone residue changes (PDB) as a fallback
+
+    Returns an uppercase 1-letter sequence (may contain X/B/Z) or "".
+    """
+    try:
+        seqres_tokens: List[str] = []
+        atom_residues: List[str] = []
+        last_atom_key = None
+
+        with open(pdb_path, "rt", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if line.startswith("SEQRES"):
+                    parts = line.split()
+                    # SEQRES <serNum> <chainID> <numRes> <resName...>
+                    if len(parts) >= 5:
+                        seqres_tokens.extend(parts[4:])
+                elif line.startswith("ATOM"):
+                    # PDB fixed columns: resName 17-20, chainID 21, resSeq 22-26
+                    res3 = line[17:20].strip().upper()
+                    chain = line[21:22]
+                    resseq = line[22:26].strip()
+                    key = (chain, resseq)
+                    if key != last_atom_key and res3:
+                        atom_residues.append(res3)
+                        last_atom_key = key
+
+                if len(seqres_tokens) > max_len:
+                    break
+                if len(atom_residues) > max_len:
+                    break
+
+        if seqres_tokens:
+            seq = "".join(_AA3_TO_1.get(r.upper(), "X") for r in seqres_tokens)
+            return re.sub(r"[^A-Z]", "", seq.upper())
+
+        if atom_residues:
+            seq = "".join(_AA3_TO_1.get(r.upper(), "X") for r in atom_residues)
+            return re.sub(r"[^A-Z]", "", seq.upper())
+    except Exception as e:
+        logger.warning(f"Failed to extract sequence from structure {pdb_path}: {e}")
+    return ""
 
 
 def get_blast_version() -> Optional[str]:
@@ -488,27 +547,38 @@ def parse_tmalign_output(output: str) -> Optional[dict]:
 
 def run_tmalign_binary(query_pdb: str, target_pdb: str, timeout: int = 30) -> Optional[dict]:
     """
-    Execute TM-align binary via WSL to compare two structures.
-    
-    Converts Windows paths to WSL paths automatically.
-    Uses exactly: wsl TMalign <pdb1> <pdb2>
+    Execute TM-align to compare two structures.
+
+    Prefers a native Windows/Linux TM-align binary when available and falls back
+    to WSL only when that is the only available execution path.
     
     Returns dict with 'tm_score', 'rmsd', and 'aligned_length', or None if execution failed.
     """
-    # Convert Windows paths to WSL paths
-    query_wsl = windows_to_wsl_path(query_pdb)
-    target_wsl = windows_to_wsl_path(target_pdb)
-    
-    logger.debug(f"Running TMalign via WSL: {query_wsl} vs {target_wsl}")
+    global TMALIGN_PATH
+    if not TMALIGN_PATH:
+        TMALIGN_PATH = check_tmalign_native()
     
     try:
-        result = subprocess.run(
-            ['wsl', 'TMalign', query_wsl, target_wsl],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=True
-        )
+        if TMALIGN_PATH:
+            logger.debug(f"Running native TM-align: {query_pdb} vs {target_pdb}")
+            result = subprocess.run(
+                [TMALIGN_PATH, query_pdb, target_pdb],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=True
+            )
+        else:
+            query_wsl = windows_to_wsl_path(query_pdb)
+            target_wsl = windows_to_wsl_path(target_pdb)
+            logger.debug(f"Running TMalign via WSL: {query_wsl} vs {target_wsl}")
+            result = subprocess.run(
+                ['wsl', 'TMalign', query_wsl, target_wsl],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=True
+            )
         
         parsed = parse_tmalign_output(result.stdout)
         if parsed is None:
@@ -527,6 +597,9 @@ def run_tmalign_binary(query_pdb: str, target_pdb: str, timeout: int = 30) -> Op
         )
         raise RuntimeError(f"TM-align execution failed: {e.stderr[:200] if e.stderr else 'Unknown error'}")
     except FileNotFoundError:
+        if TMALIGN_PATH:
+            logger.error("Native TM-align binary not found at runtime")
+            raise RuntimeError("Native TM-align not available")
         logger.error("WSL not found")
         raise RuntimeError("WSL not available - cannot run TMalign")
     except Exception as e:
@@ -795,9 +868,10 @@ async def get_status():
     blast_version = get_blast_version()
     db_indexed = SEQUENCE_DB_INDEX_PATH.with_suffix('.psq').exists()
     
-    # Check WSL and TM-align availability (runtime check)
+    # Check TM-align availability at runtime.
+    native_tmalign = check_tmalign_native()
     wsl_available, wsl_distro = check_wsl_available()
-    tmalign_available = check_tmalign_via_wsl()
+    tmalign_available = bool(native_tmalign) or check_tmalign_via_wsl()
     
     # Check structure database
     structure_files = get_structure_database_files()
@@ -811,7 +885,7 @@ async def get_status():
         },
         tmalign={
             "available": tmalign_available,
-            "method": "WSL" if tmalign_available and wsl_available else "none"
+            "method": "native" if native_tmalign else ("WSL" if tmalign_available and wsl_available else "none")
         },
         wsl={
             "available": wsl_available,
@@ -1190,7 +1264,6 @@ class ClassificationResult(BaseModel):
     best_match_id: Optional[str] = None
     blast_result: Optional[dict] = None
     tm_align_result: Optional[dict] = None
-    visualization: Optional[dict] = None  # Added for ChimeraX visualization
 
 
 class ProcessingResult(BaseModel):
@@ -1204,8 +1277,55 @@ class ProcessingResult(BaseModel):
 
 def _store_job_result(result: ProcessingResult) -> ProcessingResult:
     """Persist a completed job result for later retrieval."""
-    _job_store[result.job_id] = result.model_dump()
+    with _job_store_lock:
+        _job_store[result.job_id] = result.model_dump()
     return result
+
+
+def _init_job(job_id: str) -> None:
+    """Create a placeholder job so the UI can poll immediately."""
+    with _job_store_lock:
+        _job_store[job_id] = ProcessingResult(
+            job_id=job_id,
+            status="processing",
+            results=[],
+            completed_at=datetime.now().isoformat(),
+            alphafold_queued=False,
+        ).model_dump()
+
+
+def _fail_job(job_id: str, message: str) -> None:
+    with _job_store_lock:
+        _job_store[job_id] = ProcessingResult(
+            job_id=job_id,
+            status="error",
+            results=[
+                ClassificationResult(
+                    query_id=job_id,
+                    classification=f"Error: {message}",
+                )
+            ],
+            completed_at=datetime.now().isoformat(),
+            alphafold_queued=False,
+        ).model_dump()
+
+
+def _complete_job(job_id: str, result: ProcessingResult) -> None:
+    with _job_store_lock:
+        _job_store[job_id] = result.model_dump()
+
+
+def _run_coroutine_in_new_loop(coro):
+    """Run an async coroutine in a dedicated event loop (for background threads)."""
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(coro)
+    finally:
+        try:
+            loop.close()
+        except Exception:
+            pass
 
 
 def _get_pdb_path_from_structure_name(structure_name: str) -> Optional[str]:
@@ -1251,30 +1371,12 @@ def _classify_structure_result(match_result: StructureMatchResult, query_id: str
             "alignment_length": match_result.alignment_length or 0
         }
     
-    # Generate visualization if structure is matched
-    visualization = None
-    if match_result.matched_structure and CHIMERAX_AVAILABLE:
-        try:
-            pdb_path = _get_pdb_path_from_structure_name(match_result.matched_structure)
-            if pdb_path and pathlib.Path(pdb_path).exists():
-                # Call render_protein (non-blocking, cached)
-                viz_result = render_protein(pdb_path, str(VISUALIZATION_DIR))
-                if viz_result.get("success"):
-                    visualization = {
-                        "image": viz_result.get("image"),
-                        "cached": viz_result.get("cached", False)
-                    }
-        except Exception as e:
-            logger.warning(f"Failed to generate visualization: {e}")
-            # Don't fail the request if visualization fails
-    
     return ClassificationResult(
         query_id=query_id,
         classification=classification,
         tm_score=match_result.tm_score,
         best_match_id=match_result.matched_structure,
-        tm_align_result=tm_align_result,
-        visualization=visualization
+        tm_align_result=tm_align_result
     )
 
 
@@ -1313,36 +1415,18 @@ def _classify_sequence_result(seq_result: SequenceResult, query_id: str) -> Clas
             "alignment_length": seq_result.alignment_length or 0
         }
     
-    # Generate visualization if structure is matched
-    visualization = None
-    if seq_result.matched_structure and CHIMERAX_AVAILABLE:
-        try:
-            pdb_path = _get_pdb_path_from_structure_name(seq_result.matched_structure)
-            if pdb_path and pathlib.Path(pdb_path).exists():
-                # Call render_protein (non-blocking, cached)
-                viz_result = render_protein(pdb_path, str(VISUALIZATION_DIR))
-                if viz_result.get("success"):
-                    visualization = {
-                        "image": viz_result.get("image"),
-                        "cached": viz_result.get("cached", False)
-                    }
-        except Exception as e:
-            logger.warning(f"Failed to generate visualization: {e}")
-            # Don't fail the request if visualization fails
-    
     return ClassificationResult(
         query_id=query_id,
         classification=classification,
         tm_score=seq_result.tm_score,
         best_match_id=seq_result.matched_structure,
         blast_result=blast_result,
-        tm_align_result=tm_align_result,
-        visualization=visualization
+        tm_align_result=tm_align_result
     )
 
 
 @app.post("/api/process/structure", response_model=ProcessingResult)
-async def api_process_structure(file: UploadFile = File(...)):
+async def api_process_structure(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """
     Frontend compatibility endpoint for structure processing.
     Wraps /upload/structure and converts response format.
@@ -1355,161 +1439,73 @@ async def api_process_structure(file: UploadFile = File(...)):
     if not filename.lower().endswith(('.pdb', '.cif')):
         raise HTTPException(status_code=400, detail="File must be PDB or CIF format")
 
-    if not is_tmalign_ready():
-        raise HTTPException(
-            status_code=503,
-            detail="TM-align is unavailable in this environment. Structure comparison is disabled until WSL/TM-align access is restored."
-        )
+    job_id = f"struct_{uuid.uuid4().hex[:8]}"
+    _init_job(job_id)
     
-    # Save uploaded file temporarily
+    # Save uploaded file temporarily (background job will clean up)
     with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(filename)[1]) as tmp_file:
         tmp_file.write(content)
         tmp_path = tmp_file.name
     
-    try:
+    async def _do_work():
         query_filename = os.path.basename(filename)
-        
-        # Check if identical filename exists
-        db_files = get_structure_database_files()
-        filename_match = None
-        for db_file in db_files:
-            if db_file.name == query_filename:
-                logger.info(f"Identical filename found: {query_filename}")
-                filename_match = StructureMatchResult(
-                    status="already_in_database",
-                    tm_score=0.95,
-                    matched_structure=query_filename,
-                    method_used="filename_match",
-                    alignment_length=0
+        try:
+            # If TM-align is unavailable, fall back to BLAST-only flow by extracting a
+            # rough sequence from the uploaded structure and searching the DB.
+            if not is_tmalign_ready():
+                seq = extract_sequence_from_pdb(tmp_path)
+                if not seq:
+                    raise RuntimeError(
+                        "TM-align unavailable and could not extract a sequence from the uploaded structure."
+                    )
+                seq_result = await upload_sequence(sequence=seq, sequence_id=os.path.splitext(query_filename)[0])
+                classification_result = _classify_sequence_result(seq_result, query_filename)
+                _complete_job(
+                    job_id,
+                    ProcessingResult(
+                        job_id=job_id,
+                        status="completed",
+                        results=[classification_result],
+                        completed_at=datetime.now().isoformat(),
+                        alphafold_queued=seq_result.status in ["novel_sequence", "structure_missing"],
+                    ),
                 )
-                break
-        
-        if filename_match:
-            match_result = filename_match
-        else:
-            # Need to process with TM-align
-            # Verify structure database is available
-            if not db_files:
-                raise HTTPException(
-                    status_code=503,
-                    detail=f"Structure database is empty. No PDB files found in {STRUCTURE_DB_PATH}"
-                )
-            
-            # Run TM-align against all structures
-            logger.info(f"Running TM-align against {len(db_files)} structures")
-            query_hash = compute_file_hash(tmp_path)
-            
-            matches = []
-            comparisons_done = 0
-            
-            for db_file in db_files:
-                db_filename = db_file.stem
-                
-                # Check cache
-                cache_key = (query_hash, db_filename)
-                if cache_key in _tmalign_cache:
-                    cached_result = _tmalign_cache[cache_key]
-                    matches.append({
-                        'structure': db_filename,
-                        'tm_score': cached_result['tm_score'],
-                        'rmsd': cached_result.get('rmsd', 0.0),
-                        'aligned_length': cached_result.get('aligned_length', 0),
-                        'cached': True
-                    })
-                else:
-                    # Run TM-align via WSL
-                    try:
-                        result = run_tmalign_binary(tmp_path, str(db_file))
-                        comparisons_done += 1
-                        
-                        if result:
-                            tm_score = result['tm_score']
-                            _tmalign_cache[cache_key] = result
-                            
-                            matches.append({
-                                'structure': db_filename,
-                                'tm_score': tm_score,
-                                'rmsd': result.get('rmsd', 0.0),
-                                'aligned_length': result.get('aligned_length', 0),
-                                'cached': False,
-                                'interpretation': interpret_tm_score(tm_score)
-                            })
-                    except RuntimeError as e:
-                        logger.error(f"TM-align failed for {db_filename}: {e}")
-                        continue
-            
-            logger.info(f"Completed {comparisons_done} comparisons")
-            
-            if not matches:
-                match_result = StructureMatchResult(
-                    status="no_matches",
-                    tm_score=0.0,
-                    matched_structure=None,
-                    method_used="TM-align",
-                    alignment_length=0,
-                    top_matches=[]
-                )
-            else:
-                # Sort by TM-score (descending) and get top matches
-                matches.sort(key=lambda x: x['tm_score'], reverse=True)
-                top_matches = matches[:10]  # Top 10 matches
-                
-                best_match = matches[0]
-                
-                match_result = StructureMatchResult(
-                    status="matched",
-                    tm_score=best_match['tm_score'],
-                    matched_structure=best_match['structure'],
-                    method_used="TM-align",
-                    alignment_length=best_match.get('aligned_length', 0),
-                    top_matches=top_matches
-                )
-        
-        # Generate query ID from filename
-        query_id = os.path.splitext(filename)[0]
-        
-        # Convert to frontend format
-        classification_result = _classify_structure_result(match_result, query_id)
-        
-        # ALWAYS generate visualization for the uploaded structure itself
-        # This allows users to see their uploaded structure visualized
-        if CHIMERAX_AVAILABLE and tmp_path and os.path.exists(tmp_path):
+                return
+
+            # Reuse the canonical implementation for structure uploads.
+            tmp_upload = UploadFile(filename=query_filename, file=open(tmp_path, "rb"))
             try:
-                # Check if it's a PDB file (CIF files might not work with ChimeraX)
-                if tmp_path.lower().endswith('.pdb'):
-                    logger.info(f"Generating visualization for uploaded structure: {tmp_path}")
-                    viz_result = render_protein(tmp_path, str(VISUALIZATION_DIR))
-                    if viz_result.get("success"):
-                        # Always use the uploaded structure visualization (overwrite matched one if exists)
-                        classification_result.visualization = {
-                            "image": viz_result.get("image"),
-                            "cached": viz_result.get("cached", False)
-                        }
-                        logger.info(f"Visualization generated successfully: {classification_result.visualization['image']}")
-                    else:
-                        logger.warning(f"Visualization generation failed: {viz_result.get('error', 'Unknown error')}")
-                else:
-                    logger.info(f"Skipping visualization for non-PDB file: {tmp_path}")
-            except Exception as e:
-                logger.error(f"Exception during visualization generation: {e}", exc_info=True)
-                # Don't fail the request if visualization fails
-        else:
-            if not CHIMERAX_AVAILABLE:
-                logger.warning("ChimeraX not available - visualization will not be generated")
-            elif not tmp_path or not os.path.exists(tmp_path):
-                logger.warning(f"Temporary file not found for visualization: {tmp_path}")
-        
-        return _store_job_result(ProcessingResult(
-            job_id=f"struct_{uuid.uuid4().hex[:8]}",
-            status="completed",
-            results=[classification_result],
-            completed_at=datetime.now().isoformat(),
-            alphafold_queued=False
-        ))
-    finally:
-        # Clean up temp file (after visualization is generated)
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+                match_result = await upload_structure(tmp_upload)
+            finally:
+                try:
+                    tmp_upload.file.close()
+                except Exception:
+                    pass
+
+            classification_result = _classify_structure_result(match_result, os.path.splitext(query_filename)[0])
+            _complete_job(
+                job_id,
+                ProcessingResult(
+                    job_id=job_id,
+                    status="completed",
+                    results=[classification_result],
+                    completed_at=datetime.now().isoformat(),
+                    alphafold_queued=False,
+                ),
+            )
+        except Exception as e:
+            logger.exception("Structure processing failed")
+            _fail_job(job_id, str(e))
+        finally:
+            try:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            except Exception:
+                pass
+
+    # Run async work in background thread with its own loop.
+    background_tasks.add_task(lambda: _run_coroutine_in_new_loop(_do_work()))
+    return _job_store[job_id]
 
 
 class SequenceRequest(BaseModel):
@@ -1519,60 +1515,97 @@ class SequenceRequest(BaseModel):
 
 
 @app.post("/api/process/sequence", response_model=ProcessingResult)
-async def api_process_sequence(request: SequenceRequest):
+async def api_process_sequence(background_tasks: BackgroundTasks, request: SequenceRequest):
     """
     Frontend compatibility endpoint for sequence processing.
     Wraps /upload/sequence and converts response format.
     """
-    # Call the actual upload endpoint
-    seq_result = await upload_sequence(request.sequence, request.sequence_id)
-    
-    # Generate query ID
-    query_id = seq_result.query_id or request.sequence_id or f"seq_{uuid.uuid4().hex[:8]}"
-    
-    # Convert to frontend format
-    classification_result = _classify_sequence_result(seq_result, query_id)
-    
-    # Check if AlphaFold was queued (novel sequence or missing structure)
-    alphafold_queued = seq_result.status in ["novel_sequence", "structure_missing"]
-    
-    return _store_job_result(ProcessingResult(
-        job_id=f"seq_{uuid.uuid4().hex[:8]}",
-        status="completed",
-        results=[classification_result],
-        completed_at=datetime.now().isoformat(),
-        alphafold_queued=alphafold_queued
-    ))
+    job_id = f"seq_{uuid.uuid4().hex[:8]}"
+    _init_job(job_id)
+
+    async def _do_work():
+        try:
+            seq_result = await upload_sequence(request.sequence, request.sequence_id)
+            query_id = seq_result.query_id or request.sequence_id or job_id
+            classification_result = _classify_sequence_result(seq_result, query_id)
+            alphafold_queued = seq_result.status in ["novel_sequence", "structure_missing"]
+            _complete_job(
+                job_id,
+                ProcessingResult(
+                    job_id=job_id,
+                    status="completed",
+                    results=[classification_result],
+                    completed_at=datetime.now().isoformat(),
+                    alphafold_queued=alphafold_queued,
+                ),
+            )
+        except Exception as e:
+            logger.exception("Sequence processing failed")
+            _fail_job(job_id, str(e))
+
+    background_tasks.add_task(lambda: _run_coroutine_in_new_loop(_do_work()))
+    return _job_store[job_id]
 
 
 @app.post("/api/process/fasta", response_model=ProcessingResult)
-async def api_process_fasta(file: UploadFile = File(...)):
+async def api_process_fasta(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """
     Frontend compatibility endpoint for FASTA processing.
     Wraps /upload/multisequence and converts response format.
     """
-    # Call the actual upload endpoint
-    multi_result = await upload_multisequence(file)
-    
-    # Convert all results to frontend format
-    classification_results = []
-    alphafold_queued = False
-    
-    for i, seq_result in enumerate(multi_result.results):
-        query_id = seq_result.query_id or f"seq_{i+1}"
-        classification_result = _classify_sequence_result(seq_result, query_id)
-        classification_results.append(classification_result)
-        
-        if seq_result.status in ["novel_sequence", "structure_missing"]:
-            alphafold_queued = True
-    
-    return _store_job_result(ProcessingResult(
-        job_id=f"fasta_{uuid.uuid4().hex[:8]}",
-        status="completed",
-        results=classification_results,
-        completed_at=datetime.now().isoformat(),
-        alphafold_queued=alphafold_queued
-    ))
+    job_id = f"fasta_{uuid.uuid4().hex[:8]}"
+    _init_job(job_id)
+
+    # Read once because UploadFile streams are consumed.
+    content = await file.read()
+    filename = file.filename or "upload.fasta"
+
+    async def _do_work():
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".fasta") as tmp_file:
+                tmp_file.write(content)
+                tmp_path = tmp_file.name
+
+            tmp_upload = UploadFile(filename=filename, file=open(tmp_path, "rb"))
+            try:
+                multi_result = await upload_multisequence(tmp_upload)
+            finally:
+                try:
+                    tmp_upload.file.close()
+                except Exception:
+                    pass
+
+            classification_results: List[ClassificationResult] = []
+            alphafold_queued = False
+            for i, seq_result in enumerate(multi_result.results):
+                query_id = seq_result.query_id or f"seq_{i+1}"
+                classification_results.append(_classify_sequence_result(seq_result, query_id))
+                if seq_result.status in ["novel_sequence", "structure_missing"]:
+                    alphafold_queued = True
+
+            _complete_job(
+                job_id,
+                ProcessingResult(
+                    job_id=job_id,
+                    status="completed",
+                    results=classification_results,
+                    completed_at=datetime.now().isoformat(),
+                    alphafold_queued=alphafold_queued,
+                ),
+            )
+        except Exception as e:
+            logger.exception("FASTA processing failed")
+            _fail_job(job_id, str(e))
+        finally:
+            try:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            except Exception:
+                pass
+
+    background_tasks.add_task(lambda: _run_coroutine_in_new_loop(_do_work()))
+    return _job_store[job_id]
 
 
 @app.get("/api/job/{job_id}", response_model=ProcessingResult)
@@ -1602,64 +1635,6 @@ async def download_pdb(structure_id: str = Query(..., min_length=1)):
     )
 
 
-@app.post("/api/visualize/protein", response_model=VisualizationResponse)
-async def visualize_protein(request: VisualizationRequest):
-    """
-    Generate protein structure visualization using ChimeraX.
-    
-    Input:
-    {
-        "pdb_path": "<absolute path to pdb>"
-    }
-    
-    Returns JSON with visualization URLs.
-    Fails gracefully if ChimeraX is missing.
-    Reuses cached images if they already exist.
-    """
-    # Validate file exists
-    pdb_path = pathlib.Path(request.pdb_path)
-    if not pdb_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"PDB file not found: {request.pdb_path}"
-        )
-    
-    if not pdb_path.is_file():
-        raise HTTPException(
-            status_code=400,
-            detail=f"Path is not a file: {request.pdb_path}"
-        )
-    
-    # Check if ChimeraX is available
-    if not CHIMERAX_AVAILABLE:
-        return VisualizationResponse(
-            available=False,
-            image=None,
-            success=False,
-            error="ChimeraX not available. Visualization is disabled."
-        )
-    
-    try:
-        # Call render_protein
-        result = render_protein(str(pdb_path.resolve()), str(VISUALIZATION_DIR))
-        
-        return VisualizationResponse(
-            available=True,
-            image=result.get("image"),
-            success=result.get("success", False),
-            error=result.get("error"),
-            cached=result.get("cached", False)
-        )
-    except Exception as e:
-        logger.error(f"Error rendering protein visualization: {e}", exc_info=True)
-        return VisualizationResponse(
-            available=True,
-            image=None,
-            success=False,
-            error=f"Visualization failed: {str(e)}"
-        )
-
-
 # Startup validation: Check required binaries are available in PATH
 # External tools are resolved via PATH for portability.
 # This design supports Windows dev and Linux/HPC deployment.
@@ -1673,11 +1648,11 @@ def validate_binaries():
     2. BLAST database - auto-creates if FASTA exists but DB missing
     3. WSL availability - required for TM-align
     4. TM-align via WSL - verifies `wsl TMalign -h` works
-    
+
     Raises RuntimeError with actionable messages if required BLAST components fail.
     TM-align/WSL is optional at startup; if unavailable, the API starts in degraded mode.
     """
-    global BLASTP_PATH, MAKEBLASTDB_PATH, WSL_AVAILABLE, WSL_DISTRO, TMALIGN_AVAILABLE
+    global BLASTP_PATH, MAKEBLASTDB_PATH, TMALIGN_PATH, WSL_AVAILABLE, WSL_DISTRO, TMALIGN_AVAILABLE
     
     logger.info("Starting backend validation...")
     
@@ -1717,26 +1692,29 @@ def validate_binaries():
     except Exception as e:
         raise RuntimeError(f"makeblastdb found but failed to execute: {e}\nPath: {MAKEBLASTDB_PATH}")
     
-    # 3. Check WSL availability
-    WSL_AVAILABLE, WSL_DISTRO = check_wsl_available()
-    if not WSL_AVAILABLE:
-        TMALIGN_AVAILABLE = False
-        logger.warning(
-            "WSL is unavailable or access is denied. "
-            "TM-align-backed structure comparison will be disabled until WSL/TM-align access is restored."
-        )
+    # 3. Check TM-align via native binary first, then WSL fallback.
+    TMALIGN_PATH = check_tmalign_native()
+    if TMALIGN_PATH:
+        TMALIGN_AVAILABLE = True
+        logger.info(f"TM-align verified via native binary: {TMALIGN_PATH}")
     else:
-        logger.info(f"WSL verified: {WSL_DISTRO}")
-
-        # 4. Check TM-align via WSL (uses: wsl TMalign -h)
-        TMALIGN_AVAILABLE = check_tmalign_via_wsl()
-        if TMALIGN_AVAILABLE:
-            logger.info("TM-align verified via WSL")
-        else:
+        WSL_AVAILABLE, WSL_DISTRO = check_wsl_available()
+        if not WSL_AVAILABLE:
+            TMALIGN_AVAILABLE = False
             logger.warning(
-                "TM-align is unavailable via WSL. "
-                "Structure comparison endpoints will return 503 until TM-align access is restored."
+                "WSL is unavailable or access is denied, and no native TM-align binary was found. "
+                "Structure comparison will be disabled until TM-align access is restored."
             )
+        else:
+            logger.info(f"WSL verified: {WSL_DISTRO}")
+            TMALIGN_AVAILABLE = check_tmalign_via_wsl()
+            if TMALIGN_AVAILABLE:
+                logger.info("TM-align verified via WSL")
+            else:
+                logger.warning(
+                    "TM-align is unavailable via WSL and no native binary was found. "
+                    "Structure comparison endpoints will return 503 until TM-align access is restored."
+                )
     
     # 5. Ensure BLAST database is indexed (auto-creates if needed)
     logger.info("Checking BLAST database...")
@@ -1756,26 +1734,6 @@ def validate_binaries():
         structure_count = len(list(STRUCTURE_DB_PATH.glob("*.pdb")))
         logger.info(f"Structure database: {structure_count} PDB files found")
     
-    # 7. Validate ChimeraX (non-blocking - visualization is optional)
-    global CHIMERAX_AVAILABLE
-    if CHIMERAX_MODULES_LOADED:
-        logger.info("Validating ChimeraX for protein visualization...")
-        if is_chimerax_available():
-            if validate_chimerax():
-                CHIMERAX_AVAILABLE = True
-                logger.info("✅ ChimeraX detected and validated")
-            else:
-                CHIMERAX_AVAILABLE = False
-                logger.warning("⚠️ ChimeraX unavailable — validation failed (visualization disabled)")
-                logger.warning("   Note: On Windows, headless OpenGL may not be available.")
-                logger.warning("   Visualization requires OpenGL which may not work in --nogui mode.")
-        else:
-            CHIMERAX_AVAILABLE = False
-            logger.warning("⚠️ ChimeraX unavailable — not found at configured path (visualization disabled)")
-    else:
-        CHIMERAX_AVAILABLE = False
-        logger.warning("⚠️ ChimeraX unavailable — modules not loaded (visualization disabled)")
-    
     # Startup self-check complete
     logger.info("=" * 70)
     logger.info("✓ Backend validation complete")
@@ -1783,11 +1741,10 @@ def validate_binaries():
     logger.info(f"  BLAST+: {BLASTP_PATH}")
     logger.info(f"  Database: {SEQUENCE_DB_INDEX_PATH}")
     logger.info(f"  WSL: {WSL_DISTRO if WSL_AVAILABLE else 'Unavailable'}")
-    logger.info(f"  TM-align: {'Available via WSL' if TMALIGN_AVAILABLE else 'Unavailable (degraded mode)'}")
-    if CHIMERAX_AVAILABLE:
-        logger.info(f"  ChimeraX: Available (visualization enabled)")
+    if TMALIGN_PATH:
+        logger.info(f"  TM-align: Available via native binary ({TMALIGN_PATH})")
     else:
-        logger.info(f"  ChimeraX: Unavailable (visualization disabled)")
+        logger.info(f"  TM-align: {'Available via WSL' if TMALIGN_AVAILABLE else 'Unavailable (degraded mode)'}")
     logger.info("=" * 70)
 
 

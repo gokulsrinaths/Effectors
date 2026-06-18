@@ -19,6 +19,18 @@ an Ubuntu VM.
 - `systemd/effectors-worker.service`: systemd unit for the worker process
 - `nginx/effectors-api.conf`: nginx reverse proxy template
 
+## AlphaFold via HPC
+
+The hosted scaffold can request GPU resources for Slurm jobs when the client
+sets `run_alphafold=true` in the job request payload.
+
+To make AlphaFold/ColabFold available on the cluster nodes, set:
+
+- `EFFECTOR_HPC_JOB_PROLOGUE` in `deploy/linux/env.backend` to load modules or
+  activate a conda env
+- `EFFECTOR_ALPHAFOLD_BIN` and optional `EFFECTOR_ALPHAFOLD_ARGS` inside that
+  prologue (for example, `colabfold_batch`)
+
 ## Recommended deployment order
 
 1. Clone the repo on the Linux VM.

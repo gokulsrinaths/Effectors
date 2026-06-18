@@ -3,14 +3,16 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class JobCreateRequest(BaseModel):
+    job_id: str | None = None
     input_type: Literal["structure", "sequence", "fasta"]
     email: str | None = None
     sequence: str | None = None
     sequence_id: str | None = None
+    run_alphafold: bool = False
     notes: str | None = None
 
 
@@ -30,13 +32,16 @@ class JobResponse(BaseModel):
     created_at: datetime
     started_at: datetime | None = None
     completed_at: datetime | None = None
-    input_path: str
-    result_path: str | None = None
     summary: dict[str, Any] | None = None
     error_message: str | None = None
     backend_mode: str
     attempt_count: int
     max_attempts: int
+    has_result: bool
+    poll_path: str
+    result_path: str | None = None
+    access_token: str | None = None
+    remote_job_id: str | None = None
 
 
 class JobListResponse(BaseModel):

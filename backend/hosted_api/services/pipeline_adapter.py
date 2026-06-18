@@ -82,16 +82,31 @@ def run_real_pipeline(request_payload: dict[str, Any], result_path: Path) -> dic
     """Run the current backend pipeline through the hosted scaffold."""
     engine = _load_engine_module()
     request = JobCreateRequest.model_validate(request_payload)
+    job_id = request_payload.get("job_id") or result_path.stem
 
     if request.input_type == "sequence":
         processing_result = _run_sequence_job(engine, request)
     else:
         processing_result = _run_structure_or_fasta_job(engine, request_payload)
 
+    alphafold_result: dict[str, Any] | None = None
+    if request.input_type == "sequence" and request.run_alphafold:
+        from .alphafold_runner import run_alphafold_prediction  # noqa: WPS433
+
+        alphafold_output_dir = result_path.parent / "alphafold" / str(job_id)
+        sequence_id = request.sequence_id or job_id
+        alphafold_result = run_alphafold_prediction(
+            sequence_id=sequence_id,
+            sequence=request.sequence or "",
+            output_dir=alphafold_output_dir,
+        )
+
     result = {
         "processing_result": processing_result,
         "summary": _build_summary(processing_result),
     }
+    if alphafold_result is not None:
+        result["alphafold"] = alphafold_result
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return result

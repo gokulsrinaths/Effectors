@@ -3,8 +3,7 @@
 Research infrastructure for structure-based effector discovery. This project
 accepts protein structures, single sequences, and multi-FASTA inputs, then uses
 BLAST and TM-align against local effector databases to classify known or novel
-effectors. Optional ChimeraX integration adds structure renderings for visual
-inspection.
+effectors.
 
 The repository supports both:
 
@@ -22,9 +21,8 @@ The repository supports both:
 6. [Quick start: local research demo](#quick-start-local-research-demo)
 7. [Quick start: hosted async workflow](#quick-start-hosted-async-workflow)
 8. [Linux deployment](#linux-deployment)
-9. [ChimeraX](#chimerax)
-10. [Status and roadmap](#status-and-roadmap)
-11. [Important notes](#important-notes)
+9. [Status and roadmap](#status-and-roadmap)
+10. [Important notes](#important-notes)
 
 ## Overview
 
@@ -53,16 +51,16 @@ Primary local data assets:
 - Structure-first comparison against the local PDB database
 - Sequence-first discovery through BLASTP against the local FASTA database
 - Multi-FASTA batch handling through the same per-sequence logic
-- Optional ChimeraX-backed image generation for protein structures
 
 ### Product-oriented workflow
 
 - Persistent hosted jobs with status tracking
+- Per-job access tokens for public job polling and result retrieval
 - Upload staging for public-facing workflows
 - Background worker process
 - Condensed result summaries suitable for UI display and email
 - SMTP-ready email integration with preview-file fallback
-- Explicit execution-mode seam for future HPC submission
+- SSH/Slurm-backed execution-mode seam for MedicineBow-style HPC submission
 
 ## Architecture
 
@@ -75,7 +73,6 @@ Primary local data assets:
 | Backend demo engine | Core biology pipeline and compatibility endpoints | [`backend/main.py`](backend/main.py) |
 | Hosted API | Persistent jobs, uploads, result access | [`backend/hosted_api/main.py`](backend/hosted_api/main.py) |
 | Worker | Polls queued hosted jobs and executes them | [`backend/hosted_api/worker.py`](backend/hosted_api/worker.py) |
-| Visualization | Optional ChimeraX rendering path | [`backend/utils/chimerax_render.py`](backend/utils/chimerax_render.py) |
 | Deployment assets | Linux backend deployment templates | [`deploy/linux/`](deploy/linux) |
 
 ### Local research/demo architecture
@@ -87,8 +84,6 @@ flowchart LR
     B --> D[TM-align]
     B --> E[Local Structure DB]
     B --> F[Local Sequence DB]
-    B --> G[Optional ChimeraX]
-    G --> H[Static Visualizations]
 ```
 
 ### Hosted async architecture
@@ -102,10 +97,9 @@ flowchart LR
     E --> F[Current Backend Engine]
     F --> G[BLAST+]
     F --> H[TM-align]
-    F --> I[Optional ChimeraX]
-    F --> J[Condensed Result Summary]
-    J --> K[Result Endpoint]
-    J --> L[Email Delivery or Preview]
+    F --> I[Condensed Result Summary]
+    I --> J[Result Endpoint]
+    I --> K[Email Delivery or Preview]
 ```
 
 ### Execution modes
@@ -113,10 +107,11 @@ flowchart LR
 - `local`
   - hosted jobs run through the current backend engine on the same server
 - `hpc`
-  - reserved for future MedicineBow submission wiring
+  - stages request payloads over SSH and submits a remote Slurm wrapper
 
-The hosted scaffold currently supports `local` mode in production terms. The
-code already contains the seam for later HPC integration.
+The hosted scaffold supports local execution today and includes a configurable
+remote submission path for HPC environments that mirror the documented
+MedicineBow layout.
 
 ## Core workflows
 
@@ -133,7 +128,6 @@ Flow:
 3. Check whether the filename already exists in the local structure database
 4. If needed, run TM-align against the local structure database
 5. Return best match, TM-score, RMSD, and optional top matches
-6. If ChimeraX is available and the input is a `.pdb`, generate a cached image
 
 ### 2. Single sequence
 
@@ -162,21 +156,7 @@ Flow:
 2. Run the single-sequence logic per entry
 3. Return a per-sequence result list
 
-### 4. Visualization
-
-Primary endpoints:
-
-- `POST /api/visualize/protein`
-- `GET /api/download/pdb?structure_id=<id>`
-
-Flow:
-
-1. Resolve the relevant PDB file
-2. Render a PNG through ChimeraX if available
-3. Cache the image under `static/visualizations/`
-4. Return the image URL to the frontend
-
-### 5. Hosted async jobs
+### 4. Hosted async jobs
 
 Primary endpoints:
 
@@ -205,10 +185,6 @@ backend/
   requirements.txt           # local demo/backend dependencies
   requirements-hosted.txt    # hosted backend dependencies
   config/
-    chimerax.py             # ChimeraX path and runtime config
-  utils/
-    chimerax_render.py      # structure rendering helper
-    validate_chimerax.py    # repo-specific validation script
   hosted_api/
     main.py                 # hosted API entrypoint
     worker.py               # DB-polling worker
@@ -224,10 +200,8 @@ frontend/
     hosted/page.tsx         # hosted async UI
 Database/                    # local structure database
 effector_sequences.fasta     # local sequence database
-static/visualizations/       # cached ChimeraX images
 docs/
   DISPATCHER_PRODUCT_PLAN.md
-  CHIMERAX_USAGE.md
 deploy/
   linux/                     # Linux backend deployment assets
 ```
@@ -331,28 +305,6 @@ The deployment templates currently assume:
 - repo root at `/opt/effectors/Effectors`
 - backend running in `local` execution mode
 
-## ChimeraX
-
-ChimeraX is optional. It is only required for structure visualization, not for
-BLAST or TM-align.
-
-Relevant files:
-
-- [`backend/config/chimerax.py`](backend/config/chimerax.py)
-- [`backend/utils/chimerax_render.py`](backend/utils/chimerax_render.py)
-- [`backend/utils/validate_chimerax.py`](backend/utils/validate_chimerax.py)
-- [`docs/CHIMERAX_USAGE.md`](docs/CHIMERAX_USAGE.md)
-
-Minimal validation on Windows:
-
-```powershell
-Test-Path "C:\Program Files\ChimeraX 1.11\bin\chimerax.exe"
-py -3 backend\utils\validate_chimerax.py
-```
-
-If ChimeraX is available, uploaded PDB files can produce cached images under
-`static/visualizations/`.
-
 ## Status and roadmap
 
 ### Implemented
@@ -360,7 +312,6 @@ If ChimeraX is available, uploaded PDB files can produce cached images under
 - Real BLAST integration
 - Real TM-align integration
 - Structure, sequence, and FASTA workflows in the original frontend
-- Optional ChimeraX rendering path
 - Hosted async API scaffold with persistent jobs
 - Local worker process for queued jobs
 - Staged uploads and result retrieval
@@ -369,14 +320,16 @@ If ChimeraX is available, uploaded PDB files can produce cached images under
 - Hosted runtime health endpoint
 - Upload-size and sequence-length guardrails
 - Retry-aware worker execution
-- Optional admin-key protection for selected hosted endpoints
+- Job-token gated public status/result access
+- Admin-key protection for admin-only hosted endpoints
+- In-memory rate limiting for public job creation
+- Worker lease/heartbeat recovery for stale jobs
 
 ### Next major steps
 
 - Extract reusable pipeline services from [`backend/main.py`](backend/main.py)
-- Connect hosted `hpc` execution mode to MedicineBow for heavy jobs
 - Add a stronger queueing system if throughput grows beyond the polling worker
-- Harden auth, rate limits, and abuse controls for public internet deployment
+- Replace SQLite/local disk with managed Postgres plus object storage for multi-node deployment
 
 ## Important notes
 
