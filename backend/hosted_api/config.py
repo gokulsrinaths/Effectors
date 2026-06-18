@@ -5,6 +5,15 @@ from functools import lru_cache
 import os
 from pathlib import Path
 
+# Load .env from the repo root (backend/hosted_api/.env or project root .env)
+try:
+    from dotenv import load_dotenv
+    _env_path = Path(__file__).resolve().parent / ".env"
+    if _env_path.exists():
+        load_dotenv(_env_path, override=False)
+except ImportError:
+    pass  # python-dotenv not installed — rely on OS environment variables
+
 
 @dataclass(frozen=True)
 class Settings:

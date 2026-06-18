@@ -7,7 +7,7 @@ background-worker shape needed before introducing Redis or HPC submission.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
 import socket
 import time
 from uuid import uuid4
@@ -24,7 +24,7 @@ from .services.job_runner import refresh_submitted_hpc_job, run_job
 def reserve_next_job(worker_id: str) -> HostedJob | None:
     """Claim one queued job for this worker."""
     settings = get_settings()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     lease_expires_at = now + timedelta(seconds=settings.job_lease_seconds)
 
     with SessionLocal() as db:

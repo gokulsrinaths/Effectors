@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
+import gc
 import os
 from pathlib import Path
 import sys
@@ -30,6 +31,14 @@ class HostedApiContractTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
+        # Dispose all SQLAlchemy engines so Windows releases SQLite file locks
+        for mod_name, mod in list(sys.modules.items()):
+            if mod_name.startswith("backend.hosted_api") and hasattr(mod, "engine"):
+                try:
+                    mod.engine.dispose()
+                except Exception:
+                    pass
+        gc.collect()
         cls.temp_dir.cleanup()
 
     def load_app(self, *, rate_limit: int = 30):
@@ -132,9 +141,9 @@ class HostedApiContractTests(unittest.TestCase):
                     email=None,
                     access_token_hash="hash",
                     status="running",
-                    created_at=datetime.utcnow() - timedelta(minutes=10),
-                    started_at=datetime.utcnow() - timedelta(minutes=10),
-                    reservation_expires_at=datetime.utcnow() - timedelta(minutes=5),
+                    created_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=10),
+                    started_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=10),
+                    reservation_expires_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=5),
                     input_path=str(Path(self.temp_dir.name) / "stale.request.json"),
                     backend_mode="local",
                     attempt_count=1,
