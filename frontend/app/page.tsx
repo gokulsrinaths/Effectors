@@ -1,14 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import styles from './page.module.css'
 
-const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === '1'
-// In demo mode, use Next.js route handlers (same-origin) as a mock backend.
-const API_BASE_URL = DEMO_MODE
-  ? ''
-  : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000')
+const HOSTED_API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'
+
+// ─── Types ───────────────────────────────────────────────────────────────────
 
 interface Toast {
   id: string
@@ -41,271 +39,249 @@ interface ClassificationResult {
   best_match_id?: string
   blast_result?: BlastResult
   tm_align_result?: TmAlignResult
-  visualization?: {
-    image?: string
-    cached?: boolean
-  }
+  visualization?: { image?: string; cached?: boolean }
 }
 
-interface ProcessingResult {
-  job_id: string
+interface JobResponse {
+  id: string
   status: string
-  results: ClassificationResult[]
-  completed_at: string
-  alphafold_queued?: boolean
+  access_token?: string
+  poll_path: string
+  result_path?: string
+  error_message?: string
+  backend_mode?: string
 }
+
+interface JobResult {
+  processing_result?: {
+    results: ClassificationResult[]
+    alphafold_queued?: boolean
+    job_id?: string
+  }
+  summary?: Record<string, unknown>
+}
+
+// ─── Step labels per input type ──────────────────────────────────────────────
+
+const STEP_LABELS: Record<string, string[]> = {
+  structure: [
+    'Uploading structure file',
+    'Running TM-align against database',
+    'Gathering results',
+    'Complete',
+  ],
+  sequence: [
+    'Parsing sequence',
+    'Running BLAST + TM-align',
+    'Gathering results',
+    'Complete',
+  ],
+  fasta: [
+    'Uploading FASTA file',
+    'Running BLAST + TM-align per sequence',
+    'Gathering results',
+    'Complete',
+  ],
+}
+
+// Maps job status → which step index is active (0-based)
+function statusToStepIndex(status: string): number {
+  if (status === 'queued') return 0
+  if (status === 'reserved' || status === 'running' || status === 'submitted') return 1
+  if (status === 'completed') return 2
+  return 0
+}
+
+// ─── Main component ──────────────────────────────────────────────────────────
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<'structure' | 'sequence' | 'fasta'>('structure')
+  const [activeTab, setActiveTab] = useState<'structure' | 'sequence' | 'fasta'>('sequence')
+  const [email, setEmail] = useState('')
   const [sequenceInput, setSequenceInput] = useState('')
   const [sequenceId, setSequenceId] = useState('')
+  const [runAlphafold, setRunAlphafold] = useState(false)
   const [processing, setProcessing] = useState(false)
-  const [statusMessage, setStatusMessage] = useState('')
   const [results, setResults] = useState<ClassificationResult[]>([])
   const [toasts, setToasts] = useState<Toast[]>([])
   const [processingSteps, setProcessingSteps] = useState<{ label: string; status: StepStatus }[]>([])
+  const [jobInfo, setJobInfo] = useState<{ id: string; token: string } | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Clean up polling on unmount
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+  }, [])
 
   const addToast = (type: Toast['type'], title: string, message: string) => {
     const id = Date.now().toString()
     setToasts(prev => [...prev, { id, type, title, message }])
-    setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id))
-    }, 5000)
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 6000)
   }
 
-  const removeToast = (id: string) => {
-    setToasts(prev => prev.filter(t => t.id !== id))
+  const removeToast = (id: string) => setToasts(prev => prev.filter(t => t.id !== id))
+
+  function initSteps(inputType: string) {
+    const labels = STEP_LABELS[inputType] || STEP_LABELS.sequence
+    setProcessingSteps(labels.map((label, i) => ({
+      label,
+      status: i === 0 ? 'active' : 'pending',
+    })))
   }
 
-  const handleStructureUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
+  function advanceStep(idx: number) {
+    setProcessingSteps(prev =>
+      prev.map((s, i) => ({
+        ...s,
+        status: i < idx ? 'done' : i === idx ? 'active' : 'pending',
+      }))
+    )
+  }
 
-    if (!file.name.match(/\.(pdb|cif)$/i)) {
-      addToast('error', 'Invalid File Type', 'Please upload a PDB or CIF file.')
-      return
-    }
+  function completeSteps() {
+    setProcessingSteps(prev => prev.map(s => ({ ...s, status: 'done' })))
+  }
 
-    setProcessing(true)
-    setResults([])
-    setProcessingSteps([
-      { label: 'Uploading file', status: 'done' },
-      { label: 'Running TM-align against structure database', status: 'active' },
-      { label: 'Generating visualization', status: 'pending' },
-      { label: 'Finalizing results', status: 'pending' },
-    ])
+  function startPolling(jobId: string, token: string, inputType: string) {
+    if (pollRef.current) clearInterval(pollRef.current)
 
-    const formData = new FormData()
-    formData.append('file', file)
+    pollRef.current = setInterval(async () => {
+      try {
+        const { data: job } = await axios.get<JobResponse>(
+          `${HOSTED_API}/jobs/${jobId}`,
+          { headers: { 'x-job-token': token } }
+        )
 
-    try {
-      await new Promise(r => setTimeout(r, 1200))
-      setProcessingSteps(s => s.map((step, i) => i === 1 ? { ...step, status: 'done' as StepStatus } : step).map((step, i) => i === 2 ? { ...step, status: 'active' as StepStatus } : step))
-      await new Promise(r => setTimeout(r, 1000))
-      setProcessingSteps(s => s.map((step, i) => i === 2 ? { ...step, status: 'done' as StepStatus } : step).map((step, i) => i === 3 ? { ...step, status: 'active' as StepStatus } : step))
-      await new Promise(r => setTimeout(r, 600))
-      setProcessingSteps(s => s.map((step, i) => i === 3 ? { ...step, status: 'done' as StepStatus } : step))
+        advanceStep(statusToStepIndex(job.status))
 
-      const response = await axios.post<ProcessingResult>(
-        `${API_BASE_URL}/api/process/structure`,
-        formData,
-        {
-          headers: { 'Content-Type': 'multipart/form-data' },
+        if (job.status === 'completed') {
+          clearInterval(pollRef.current!)
+          completeSteps()
+          // Fetch actual results
+          try {
+            const { data: resultData } = await axios.get<JobResult>(
+              `${HOSTED_API}/jobs/results/${jobId}`,
+              { headers: { 'x-job-token': token } }
+            )
+            const resultsList = resultData.processing_result?.results ?? []
+            if (resultsList.length === 0) {
+              addToast('warning', 'No Results', 'Job completed but returned no result items.')
+            } else {
+              setResults(resultsList)
+              const alphafoldQ = resultData.processing_result?.alphafold_queued
+              if (alphafoldQ) {
+                addToast('info', 'AlphaFold Queued', 'Novel sequence(s) queued for structure prediction.')
+              }
+              addToast('success', 'Processing Complete', `${resultsList.length} result(s) ready.`)
+            }
+          } catch {
+            addToast('error', 'Result Fetch Failed', 'Job completed but results could not be retrieved.')
+          }
+          setProcessing(false)
+
+        } else if (job.status === 'failed') {
+          clearInterval(pollRef.current!)
+          setProcessing(false)
+          setProcessingSteps([])
+          addToast('error', 'Job Failed', job.error_message || 'Unknown error during processing.')
         }
-      )
-
-      setResults(response.data.results)
-      setStatusMessage('Structure comparison completed.')
-      addToast('success', 'Processing Complete', 'Structure analysis completed successfully.')
-    } catch (error: any) {
-      setStatusMessage('Error processing structure.')
-      let errorMessage = 'Failed to process structure file.'
-      if (error.response?.data) {
-        if (typeof error.response.data.detail === 'string') {
-          errorMessage = error.response.data.detail
-        } else if (Array.isArray(error.response.data.detail)) {
-          errorMessage = error.response.data.detail.map((e: any) => 
-            typeof e === 'string' ? e : e.msg || JSON.stringify(e)
-          ).join(', ')
-        } else if (error.response.data.detail) {
-          errorMessage = typeof error.response.data.detail === 'string' 
-            ? error.response.data.detail 
-            : JSON.stringify(error.response.data.detail)
-        } else if (error.response.data.message) {
-          errorMessage = error.response.data.message
-        }
-      } else if (error.message) {
-        errorMessage = error.message
+      } catch {
+        // transient network error — keep polling
       }
-      addToast('error', 'Processing Error', errorMessage)
-    } finally {
-      setProcessing(false)
-      setProcessingSteps([])
-    }
+    }, 2000)
   }
 
-  const handleSequenceSubmit = async () => {
+  // ── Submit handlers ──────────────────────────────────────────────────────
+
+  async function handleSequenceSubmit() {
     if (!sequenceInput.trim()) {
-      addToast('error', 'Invalid Input', 'Please enter a protein sequence.')
+      addToast('error', 'Missing Input', 'Please enter a protein sequence.')
       return
     }
-
     setProcessing(true)
     setResults([])
-    setProcessingSteps([
-      { label: 'Parsing sequence', status: 'done' },
-      { label: 'Predicting structure using AlphaFold 2.3', status: 'active' },
-      { label: 'Performing structure comparison (TM-align)', status: 'pending' },
-      { label: 'Finalizing results', status: 'pending' },
-    ])
+    setJobInfo(null)
+    initSteps('sequence')
 
     try {
-      await new Promise(r => setTimeout(r, 800))
-      setProcessingSteps(s => s.map((step, i) => i === 1 ? { ...step, status: 'done' as StepStatus } : step).map((step, i) => i === 2 ? { ...step, status: 'active' as StepStatus } : step))
-      await new Promise(r => setTimeout(r, 1500))
-      setProcessingSteps(s => s.map((step, i) => i === 2 ? { ...step, status: 'done' as StepStatus } : step).map((step, i) => i === 3 ? { ...step, status: 'active' as StepStatus } : step))
-      await new Promise(r => setTimeout(r, 500))
-      setProcessingSteps(s => s.map((step, i) => i === 3 ? { ...step, status: 'done' as StepStatus } : step))
-
-      const response = await axios.post<ProcessingResult>(
-        `${API_BASE_URL}/api/process/sequence`,
-        {
-          sequence: sequenceInput.trim(),
-          sequence_id: sequenceId.trim() || undefined,
-        }
-      )
-
-      if (response.data.alphafold_queued) {
-        addToast('info', 'Structure Prediction Queued', 
-          'New structure is being generated using AlphaFold/ColabFold (job queued)')
-      }
-
-      setResults(response.data.results)
-      setStatusMessage('Sequence analysis completed.')
-      addToast('success', 'Processing Complete', 'Sequence analysis completed successfully.')
-    } catch (error: any) {
-      setStatusMessage('Error processing sequence.')
-      let errorMessage = 'Failed to process sequence.'
-      if (error.response?.data) {
-        if (typeof error.response.data.detail === 'string') {
-          errorMessage = error.response.data.detail
-        } else if (Array.isArray(error.response.data.detail)) {
-          errorMessage = error.response.data.detail.map((e: any) => 
-            typeof e === 'string' ? e : e.msg || JSON.stringify(e)
-          ).join(', ')
-        } else if (error.response.data.detail) {
-          errorMessage = typeof error.response.data.detail === 'string' 
-            ? error.response.data.detail 
-            : JSON.stringify(error.response.data.detail)
-        } else if (error.response.data.message) {
-          errorMessage = error.response.data.message
-        }
-      } else if (error.message) {
-        errorMessage = error.message
-      }
-      addToast('error', 'Processing Error', errorMessage)
-    } finally {
+      const { data: job } = await axios.post<JobResponse>(`${HOSTED_API}/jobs`, {
+        input_type: 'sequence',
+        sequence: sequenceInput.trim(),
+        sequence_id: sequenceId.trim() || undefined,
+        email: email.trim() || undefined,
+        run_alphafold: runAlphafold,
+      })
+      setJobInfo({ id: job.id, token: job.access_token || '' })
+      advanceStep(0)
+      startPolling(job.id, job.access_token || '', 'sequence')
+    } catch (err: unknown) {
       setProcessing(false)
       setProcessingSteps([])
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      addToast('error', 'Submission Failed', detail || 'Could not create sequence job.')
     }
   }
 
-  const handleFastaUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  async function handleFileUpload(file: File, inputType: 'structure' | 'fasta') {
+    setProcessing(true)
+    setResults([])
+    setJobInfo(null)
+    initSteps(inputType)
+
+    const form = new FormData()
+    form.append('input_type', inputType)
+    form.append('file', file)
+    if (email.trim()) form.append('email', email.trim())
+
+    try {
+      const { data: job } = await axios.post<JobResponse>(`${HOSTED_API}/jobs/upload`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+      setJobInfo({ id: job.id, token: job.access_token || '' })
+      advanceStep(0)
+      startPolling(job.id, job.access_token || '', inputType)
+    } catch (err: unknown) {
+      setProcessing(false)
+      setProcessingSteps([])
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      addToast('error', 'Upload Failed', detail || `Could not create ${inputType} job.`)
+    }
+  }
+
+  function handleStructureChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
-
-    if (!file.name.match(/\.(fasta|fa|fas)$/i)) {
-      addToast('error', 'Invalid File Type', 'Please upload a FASTA file.')
+    if (!file.name.match(/\.(pdb|cif)$/i)) {
+      addToast('error', 'Invalid File', 'Please upload a .pdb or .cif file.')
       return
     }
-
-    setProcessing(true)
-    setResults([])
-    setProcessingSteps([
-      { label: 'Parsing FASTA file', status: 'done' },
-      { label: 'Predicting structures using AlphaFold 2.3', status: 'active' },
-      { label: 'Performing TM-align comparisons', status: 'pending' },
-      { label: 'Finalizing batch results', status: 'pending' },
-    ])
-
-    const formData = new FormData()
-    formData.append('file', file)
-
-    try {
-      await new Promise(r => setTimeout(r, 1000))
-      setProcessingSteps(s => s.map((step, i) => i === 1 ? { ...step, status: 'done' as StepStatus } : step).map((step, i) => i === 2 ? { ...step, status: 'active' as StepStatus } : step))
-      await new Promise(r => setTimeout(r, 1800))
-      setProcessingSteps(s => s.map((step, i) => i === 2 ? { ...step, status: 'done' as StepStatus } : step).map((step, i) => i === 3 ? { ...step, status: 'active' as StepStatus } : step))
-      await new Promise(r => setTimeout(r, 700))
-      setProcessingSteps(s => s.map((step, i) => i === 3 ? { ...step, status: 'done' as StepStatus } : step))
-
-      const response = await axios.post<ProcessingResult>(
-        `${API_BASE_URL}/api/process/fasta`,
-        formData,
-        {
-          headers: { 'Content-Type': 'multipart/form-data' },
-        }
-      )
-
-      if (response.data.alphafold_queued) {
-        addToast('info', 'Structure Prediction Queued', 
-          'New structures are being generated using AlphaFold/ColabFold (job queued)')
-      }
-
-      setResults(response.data.results)
-      setStatusMessage(`Processed ${response.data.results.length} sequences.`)
-      addToast('success', 'Processing Complete', 
-        `Successfully processed ${response.data.results.length} sequences.`)
-    } catch (error: any) {
-      setStatusMessage('Error processing FASTA file.')
-      let errorMessage = 'Failed to process FASTA file.'
-      if (error.response?.data) {
-        if (typeof error.response.data.detail === 'string') {
-          errorMessage = error.response.data.detail
-        } else if (Array.isArray(error.response.data.detail)) {
-          errorMessage = error.response.data.detail.map((e: any) => 
-            typeof e === 'string' ? e : e.msg || JSON.stringify(e)
-          ).join(', ')
-        } else if (error.response.data.detail) {
-          errorMessage = typeof error.response.data.detail === 'string' 
-            ? error.response.data.detail 
-            : JSON.stringify(error.response.data.detail)
-        } else if (error.response.data.message) {
-          errorMessage = error.response.data.message
-        }
-      } else if (error.message) {
-        errorMessage = error.message
-      }
-      addToast('error', 'Processing Error', errorMessage)
-    } finally {
-      setProcessing(false)
-      setProcessingSteps([])
-    }
+    handleFileUpload(file, 'structure')
   }
+
+  function handleFastaChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (!file.name.match(/\.(fasta|fa|fas)$/i)) {
+      addToast('error', 'Invalid File', 'Please upload a .fasta, .fa, or .fas file.')
+      return
+    }
+    handleFileUpload(file, 'fasta')
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────
 
   return (
     <div className={styles.container}>
-      {/* Toast Container */}
+
+      {/* Toasts */}
       <div className="toast-container">
-        {toasts.map(toast => (
-          <div key={toast.id} className={`toast ${toast.type}`}>
-            <div className="toast-header">{toast.title}</div>
-            <div className="toast-message">{toast.message}</div>
-            <button 
-              onClick={() => removeToast(toast.id)}
-              style={{
-                position: 'absolute',
-                top: '8px',
-                right: '8px',
-                background: 'none',
-                border: 'none',
-                fontSize: '18px',
-                cursor: 'pointer',
-                color: '#6c757d'
-              }}
-            >
-              ×
-            </button>
+        {toasts.map(t => (
+          <div key={t.id} className={`toast ${t.type}`}>
+            <div className="toast-header">{t.title}</div>
+            <div className="toast-message">{t.message}</div>
+            <button
+              onClick={() => removeToast(t.id)}
+              style={{ position: 'absolute', top: 8, right: 8, background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: '#6c757d' }}
+            >×</button>
           </div>
         ))}
       </div>
@@ -314,71 +290,59 @@ export default function Home() {
       <header className={styles.header}>
         <h1>Structure-based Effector Discovery Platform</h1>
         <p className={styles.subtitle}>
-          Research infrastructure for identifying and classifying protein effectors through 
-          sequence search (BLAST) and structure comparison (TM-align)
-        </p>
-        <p className={styles.subtitle}>
-          Need the async hosted workflow instead of the demo path? Open <a href="/hosted">/hosted</a>.
+          Identify and classify protein effectors through sequence search (BLAST) and
+          structure comparison (TM-align). Submit a structure, sequence, or batch FASTA
+          file — results are processed by the pipeline and returned when ready.
         </p>
       </header>
 
       <main className={styles.main}>
-        {/* Input Panel */}
-        <section className={styles.inputPanel}>
-          <h2>Input Options</h2>
-          <p className={styles.instructionText}>
-            Select an input method below. The system will determine whether your protein 
-            is already known, structurally similar, or novel using sequence search and 
-            structure comparison methods.
-          </p>
 
+        {/* Input panel */}
+        <section className={styles.inputPanel}>
+          <h2>Submit Input</h2>
+
+          {/* Email (optional, applies to all job types) */}
+          <div style={{ marginBottom: 20 }}>
+            <label className={styles.label}>
+              Email (optional — receive a notification when the job completes):
+              <input
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className={styles.textInput}
+                disabled={processing}
+                style={{ marginTop: 6 }}
+              />
+            </label>
+          </div>
+
+          {/* Tabs */}
           <div className={styles.tabs}>
-            <button
-              className={`${styles.tab} ${activeTab === 'structure' ? styles.activeTab : ''}`}
-              onClick={() => setActiveTab('structure')}
-            >
-              Upload Structure (PDB/CIF)
-            </button>
-            <button
-              className={`${styles.tab} ${activeTab === 'sequence' ? styles.activeTab : ''}`}
-              onClick={() => setActiveTab('sequence')}
-            >
-              Paste Single Sequence
-            </button>
-            <button
-              className={`${styles.tab} ${activeTab === 'fasta' ? styles.activeTab : ''}`}
-              onClick={() => setActiveTab('fasta')}
-            >
-              Upload FASTA File
-            </button>
+            {(['sequence', 'structure', 'fasta'] as const).map(tab => (
+              <button
+                key={tab}
+                className={`${styles.tab} ${activeTab === tab ? styles.activeTab : ''}`}
+                onClick={() => { if (!processing) setActiveTab(tab) }}
+                disabled={processing}
+              >
+                {tab === 'sequence' && 'Paste Sequence'}
+                {tab === 'structure' && 'Upload Structure (PDB/CIF)'}
+                {tab === 'fasta' && 'Upload FASTA File'}
+              </button>
+            ))}
           </div>
 
           <div className={styles.tabContent}>
-            {activeTab === 'structure' && (
-              <div className={styles.inputSection}>
-                <p className={styles.inputDescription}>
-                  Upload a protein structure file in PDB or CIF format. The system will 
-                  compare your structure against the internal structure database using TM-align.
-                </p>
-                <label className={styles.fileLabel}>
-                  <input
-                    type="file"
-                    accept=".pdb,.cif"
-                    onChange={handleStructureUpload}
-                    disabled={processing}
-                    className={styles.fileInput}
-                  />
-                  <span className={styles.fileButton}>Choose Structure File</span>
-                </label>
-              </div>
-            )}
 
+            {/* Sequence tab */}
             {activeTab === 'sequence' && (
               <div className={styles.inputSection}>
                 <p className={styles.inputDescription}>
-                  Paste a single protein sequence in FASTA format (with or without header). 
-                  The system will predict the structure using AlphaFold 2.3, then perform 
-                  structure comparison if matches are found.
+                  Paste a single protein sequence. BLAST searches the effector database;
+                  if a hit is found, TM-align compares the matched structure against the
+                  full database.
                 </p>
                 <div className={styles.sequenceInputGroup}>
                   <label className={styles.label}>
@@ -386,7 +350,7 @@ export default function Home() {
                     <input
                       type="text"
                       value={sequenceId}
-                      onChange={(e) => setSequenceId(e.target.value)}
+                      onChange={e => setSequenceId(e.target.value)}
                       placeholder="e.g., EFF_001"
                       className={styles.textInput}
                       disabled={processing}
@@ -396,78 +360,127 @@ export default function Home() {
                     Protein Sequence:
                     <textarea
                       value={sequenceInput}
-                      onChange={(e) => setSequenceInput(e.target.value)}
-                      placeholder=">sequence_id&#10;MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKRQTLGQHDFSAGEGLYTHMKALRPDEDRLSPLHSVYVDQWDWERVMGDGERQFSTLKSTVEAIWAGIKATEAAVSEEFGLAPFLPDQIH..."
-                      rows={8}
+                      onChange={e => setSequenceInput(e.target.value)}
+                      placeholder=">sequence_id&#10;MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAP..."
+                      rows={7}
                       className={styles.textarea}
                       disabled={processing}
                     />
+                  </label>
+                  <label className={styles.label} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, fontWeight: 400 }}>
+                    <input
+                      type="checkbox"
+                      checked={runAlphafold}
+                      onChange={e => setRunAlphafold(e.target.checked)}
+                      disabled={processing}
+                    />
+                    Run AlphaFold structure prediction if no match found (requires HPC)
                   </label>
                   <button
                     onClick={handleSequenceSubmit}
                     disabled={processing || !sequenceInput.trim()}
                     className={styles.submitButton}
                   >
-                    Process Sequence
+                    {processing ? 'Processing…' : 'Run Analysis'}
                   </button>
                 </div>
               </div>
             )}
 
+            {/* Structure tab */}
+            {activeTab === 'structure' && (
+              <div className={styles.inputSection}>
+                <p className={styles.inputDescription}>
+                  Upload a PDB or CIF structure file. TM-align will compare it against
+                  all 470 structures in the effector database and return the top matches.
+                </p>
+                <label className={styles.fileLabel}>
+                  <input
+                    type="file"
+                    accept=".pdb,.cif"
+                    onChange={handleStructureChange}
+                    disabled={processing}
+                    className={styles.fileInput}
+                  />
+                  <span className={styles.fileButton}>
+                    {processing ? 'Processing…' : 'Choose Structure File'}
+                  </span>
+                </label>
+              </div>
+            )}
+
+            {/* FASTA tab */}
             {activeTab === 'fasta' && (
               <div className={styles.inputSection}>
                 <p className={styles.inputDescription}>
-                  Upload a FASTA file containing multiple protein sequences. Each sequence 
-                  will be processed independently through AlphaFold 2.3 structure prediction and comparison.
+                  Upload a FASTA file with one or more protein sequences. Each sequence
+                  is processed independently through BLAST and TM-align.
                 </p>
                 <label className={styles.fileLabel}>
                   <input
                     type="file"
                     accept=".fasta,.fa,.fas"
-                    onChange={handleFastaUpload}
+                    onChange={handleFastaChange}
                     disabled={processing}
                     className={styles.fileInput}
                   />
-                  <span className={styles.fileButton}>Choose FASTA File</span>
+                  <span className={styles.fileButton}>
+                    {processing ? 'Processing…' : 'Choose FASTA File'}
+                  </span>
                 </label>
               </div>
             )}
+
           </div>
         </section>
 
-        {/* Processing Status Panel */}
-        {processing && (
+        {/* Processing status */}
+        {processing && processingSteps.length > 0 && (
           <section className={styles.statusPanel}>
             <h2>Processing</h2>
             <div className={styles.stepsContainer}>
               {processingSteps.map((step, idx) => (
                 <div
                   key={idx}
-                  className={`${styles.stepRow} ${step.status === 'active' ? styles.active : step.status === 'done' ? styles.done : styles.pending}`}
+                  className={`${styles.stepRow} ${
+                    step.status === 'active' ? styles.active
+                    : step.status === 'done' ? styles.done
+                    : styles.pending
+                  }`}
                 >
                   <div className={styles.stepIcon}>
                     {step.status === 'done' ? (
-                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="9" stroke="#28a745" strokeWidth="2"/><path d="M6 10l3 3 5-5" stroke="#28a745" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                        <circle cx="10" cy="10" r="9" stroke="#28a745" strokeWidth="2"/>
+                        <path d="M6 10l3 3 5-5" stroke="#28a745" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
                     ) : step.status === 'active' ? (
-                      <div className={styles.stepSpinner}></div>
+                      <div className={styles.stepSpinner} />
                     ) : (
-                      <div className={styles.stepDot}></div>
+                      <div className={styles.stepDot} />
                     )}
                   </div>
                   <span className={styles.stepLabel}>{step.label}</span>
                 </div>
               ))}
             </div>
-            {statusMessage && (
-              <p className={styles.statusMessage}>{statusMessage}</p>
+            {jobInfo && (
+              <p style={{ marginTop: 14, fontSize: '0.8rem', color: '#6c757d', fontFamily: 'monospace' }}>
+                job_id: {jobInfo.id}
+              </p>
             )}
           </section>
         )}
 
-        {/* Results Panel */}
+        {/* Results */}
         {results.length > 0 && (
           <section className={styles.resultsPanel}>
             <h2>Results</h2>
+            {jobInfo && (
+              <p style={{ fontSize: '0.8rem', color: '#6c757d', marginBottom: 16, fontFamily: 'monospace' }}>
+                job_id: {jobInfo.id}
+              </p>
+            )}
             <div className={styles.resultsTable}>
               <table>
                 <thead>
@@ -480,182 +493,112 @@ export default function Home() {
                   </tr>
                 </thead>
                 <tbody>
-                  {results.map((result, idx) => (
-                    <ResultRow key={idx} result={result} />
+                  {results.map((r, i) => (
+                    <ResultRow key={i} result={r} apiBase={HOSTED_API} />
                   ))}
                 </tbody>
               </table>
             </div>
           </section>
         )}
+
       </main>
 
       <footer className={styles.footer}>
-        <p>Structure-based Effector Discovery Pipeline — Research Infrastructure Platform</p>
+        <p>Structure-based Effector Discovery Pipeline</p>
       </footer>
+
     </div>
   )
 }
 
-function ResultRow({ result }: { result: ClassificationResult }) {
+// ─── Result row ───────────────────────────────────────────────────────────────
+
+function ResultRow({ result, apiBase }: { result: ClassificationResult; apiBase: string }) {
   const [expanded, setExpanded] = useState(false)
 
-  const getClassificationColor = (classification: string) => {
-    if (classification.includes('Already in database')) return '#28a745'
-    if (classification.includes('Known structural family')) return '#ffc107'
-    return '#dc3545'
+  const classColor = (c: string) => {
+    if (c.includes('Already in database')) return '#28a745'
+    if (c.includes('Known structural family') || c.includes('Structurally similar')) return '#e6a817'
+    if (c.includes('Novel') || c.includes('missing') || c.includes('required')) return '#dc3545'
+    return '#6c757d'
   }
 
   return (
     <>
       <tr>
         <td>{result.query_id}</td>
-        <td>{result.best_match_id || 'N/A'}</td>
-        <td>{result.tm_score?.toFixed(3) || 'N/A'}</td>
+        <td>{result.best_match_id || '—'}</td>
+        <td>{result.tm_score != null ? result.tm_score.toFixed(3) : '—'}</td>
         <td>
-          <span
-            style={{
-              color: getClassificationColor(result.classification),
-              fontWeight: 600,
-            }}
-          >
+          <span style={{ color: classColor(result.classification), fontWeight: 600 }}>
             {result.classification}
           </span>
         </td>
         <td>
-          <button
-            onClick={() => setExpanded(!expanded)}
-            className={styles.expandButton}
-          >
+          <button onClick={() => setExpanded(x => !x)} className={styles.expandButton}>
             {expanded ? '−' : '+'}
           </button>
         </td>
       </tr>
+
       {expanded && (
         <tr>
           <td colSpan={5} className={styles.detailsCell}>
             <div className={styles.detailsContent}>
+
               {result.blast_result && (
                 <div>
-                  <h4>BLAST Results:</h4>
+                  <h4>BLAST</h4>
                   <ul>
                     <li>Hit ID: {result.blast_result.hit_id}</li>
                     <li>E-value: {result.blast_result.e_value.toExponential(2)}</li>
                     <li>Identity: {(result.blast_result.identity * 100).toFixed(1)}%</li>
-                    {typeof result.blast_result.query_coverage === 'number' && (
+                    {result.blast_result.query_coverage != null && (
                       <li>Query Coverage: {(result.blast_result.query_coverage * 100).toFixed(1)}%</li>
                     )}
                     <li>Alignment Length: {result.blast_result.alignment_length}</li>
                   </ul>
                 </div>
               )}
+
               {result.tm_align_result && (
                 <div>
-                  <h4>TM-align Results:</h4>
+                  <h4>TM-align</h4>
                   <ul>
-                    <li>Target ID: {result.tm_align_result.target_id}</li>
+                    <li>Target: {result.tm_align_result.target_id}</li>
                     <li>TM-score: {result.tm_align_result.tm_score.toFixed(3)}</li>
                     <li>RMSD: {result.tm_align_result.rmsd.toFixed(2)} Å</li>
                     <li>Alignment Length: {result.tm_align_result.alignment_length}</li>
                   </ul>
                 </div>
               )}
-              {/* Show visualization section only if available */}
-              {result.visualization && result.visualization.image && (
-                <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px solid #dee2e6' }}>
-                  <h4>🧬 Protein Structure Visualization</h4>
-                  <div style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '15px',
-                    alignItems: 'flex-start'
-                  }}>
-                    <div style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: '15px',
-                      alignItems: 'flex-start'
-                    }}>
-                      <div style={{
-                        width: '100%',
-                        maxWidth: '600px',
-                        border: '1px solid #dee2e6',
-                        borderRadius: '8px',
-                        overflow: 'hidden',
-                        backgroundColor: '#fff'
-                      }}>
-                        <img
-                          src={`${API_BASE_URL}${result.visualization.image}`}
-                          alt="Protein structure"
-                          style={{
-                            width: '100%',
-                            height: 'auto',
-                            display: 'block'
-                          }}
-                          onError={(e) => {
-                            const target = e.target as HTMLImageElement
-                            target.style.display = 'none'
-                          }}
-                        />
-                      </div>
-                    <div style={{
-                      display: 'flex',
-                      gap: '10px',
-                      flexWrap: 'wrap'
-                    }}>
-                      <a
-                        href={`${API_BASE_URL}${result.visualization.image}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          padding: '8px 16px',
-                          backgroundColor: '#007bff',
-                          color: 'white',
-                          textDecoration: 'none',
-                          borderRadius: '4px',
-                          fontSize: '14px',
-                          fontWeight: 500,
-                          display: 'inline-block'
-                        }}
-                      >
-                        Open Full Image
-                      </a>
-                      {result.best_match_id && (
-                        <button
-                          onClick={() => {
-                            // Download PDB file - construct path from best_match_id
-                            const pdbPath = `${API_BASE_URL}/api/download/pdb?structure_id=${encodeURIComponent(result.best_match_id || '')}`
-                            window.open(pdbPath, '_blank')
-                          }}
-                          style={{
-                            padding: '8px 16px',
-                            backgroundColor: '#28a745',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            fontSize: '14px',
-                            fontWeight: 500,
-                            cursor: 'pointer'
-                          }}
-                        >
-                          Download PDB
-                        </button>
-                      )}
-                    </div>
-                    {result.visualization.cached && (
-                      <p style={{
-                        fontSize: '12px',
-                        color: '#6c757d',
-                        margin: 0,
-                        fontStyle: 'italic'
-                      }}>
-                        (Using cached visualization)
-                      </p>
-                    )}
-                    </div>
-                  </div>
+
+              {result.best_match_id && (
+                <div style={{ marginTop: 12 }}>
+                  <button
+                    onClick={() =>
+                      window.open(
+                        `${apiBase}/api/download/pdb?structure_id=${encodeURIComponent(result.best_match_id!)}`,
+                        '_blank'
+                      )
+                    }
+                    style={{
+                      padding: '7px 16px',
+                      background: '#28a745',
+                      color: '#fff',
+                      border: 'none',
+                      borderRadius: 4,
+                      fontSize: 14,
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Download PDB
+                  </button>
                 </div>
               )}
+
             </div>
           </td>
         </tr>
@@ -663,4 +606,3 @@ function ResultRow({ result }: { result: ClassificationResult }) {
     </>
   )
 }
-
