@@ -4,13 +4,13 @@
   "private": true,
   "scripts": {
     "predev": "node scripts/check-node-fork.js",
-    "dev": "next dev",
+    "dev": "next dev --turbo",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
   },
   "engines": {
-    "node": ">=18.18.0 <24"
+    "node": ">=18.18.0"
   },
   "dependencies": {
     "axios": "^1.13.2",

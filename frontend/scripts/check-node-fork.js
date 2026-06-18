@@ -56,7 +56,7 @@ async function main() {
       // If the probe above succeeded, allow dev to proceed but warn loudly.
       console.warn("");
       console.warn(
-        `Warning: Detected Node.js ${process.versions.node} on Windows. If the dev server fails, use Node.js 22/20 LTS.`
+        `Note: Running Node.js ${process.versions.node} on Windows with Turbopack — this is supported.`
       );
       console.warn("");
     }
