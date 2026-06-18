@@ -1,341 +1,289 @@
 # Structure-based Effector Discovery Pipeline
 
-Research infrastructure for structure-based effector discovery. This project
-accepts protein structures, single sequences, and multi-FASTA inputs, then uses
-BLAST and TM-align against local effector databases to classify known or novel
+Research infrastructure for structure-based effector discovery using BLAST,
+TM-align, and AlphaFold/ColabFold. Accepts protein structures, sequences, and
+multi-FASTA inputs and classifies them as known, structurally similar, or novel
 effectors.
 
-The repository supports both:
+Jobs run on the **University of Wyoming Medicine Bow HPC cluster** (Slurm) via
+SSH from your local machine. AlphaFold structure prediction runs on Medicine Bow
+GPU nodes using ColabFold 1.5.5.
 
-- a synchronous research/demo workflow for direct local use
-- a hosted async workflow with persistent jobs, a worker process, staged uploads,
-  result summaries, and email-ready completion flow
-
-## Table of contents
-
-1. [Overview](#overview)
-2. [Capabilities](#capabilities)
-3. [Architecture](#architecture)
-4. [Core workflows](#core-workflows)
-5. [Repository layout](#repository-layout)
-6. [Quick start: local research demo](#quick-start-local-research-demo)
-7. [Quick start: hosted async workflow](#quick-start-hosted-async-workflow)
-8. [Linux deployment](#linux-deployment)
-9. [Status and roadmap](#status-and-roadmap)
-10. [Important notes](#important-notes)
-
-## Overview
-
-The project is built around a simple biological question:
-
-- if a submitted protein is already known, identify the matching family quickly
-- if it is structurally similar, show the best supported match
-- if it is novel or incomplete, return a clear result and preserve a path to
-  downstream structure generation workflows
-
-Inputs supported today:
-
-- `.pdb` and `.cif` structure files
-- single protein sequences
-- multi-FASTA files
-
-Primary local data assets:
-
-- [`Database/`](Database) for curated effector-related structures
-- [`effector_sequences.fasta`](effector_sequences.fasta) for sequence search
-
-## Capabilities
-
-### Research engine
-
-- Structure-first comparison against the local PDB database
-- Sequence-first discovery through BLASTP against the local FASTA database
-- Multi-FASTA batch handling through the same per-sequence logic
-
-### Product-oriented workflow
-
-- Persistent hosted jobs with status tracking
-- Per-job access tokens for public job polling and result retrieval
-- Upload staging for public-facing workflows
-- Background worker process
-- Condensed result summaries suitable for UI display and email
-- SMTP-ready email integration with preview-file fallback
-- SSH/Slurm-backed execution-mode seam for MedicineBow-style HPC submission
-
-## Architecture
-
-### System view
-
-| Layer | Purpose | Primary files |
-| --- | --- | --- |
-| Frontend demo | Direct synchronous UI for local research workflows | [`frontend/app/page.tsx`](frontend/app/page.tsx) |
-| Frontend hosted | Async UI for public-facing job creation and polling | [`frontend/app/hosted/page.tsx`](frontend/app/hosted/page.tsx) |
-| Backend demo engine | Core biology pipeline and compatibility endpoints | [`backend/main.py`](backend/main.py) |
-| Hosted API | Persistent jobs, uploads, result access | [`backend/hosted_api/main.py`](backend/hosted_api/main.py) |
-| Worker | Polls queued hosted jobs and executes them | [`backend/hosted_api/worker.py`](backend/hosted_api/worker.py) |
-| Deployment assets | Linux backend deployment templates | [`deploy/linux/`](deploy/linux) |
-
-### Local research/demo architecture
-
-```mermaid
-flowchart LR
-    A[Next.js Demo UI] --> B[FastAPI Demo Backend]
-    B --> C[BLAST+]
-    B --> D[TM-align]
-    B --> E[Local Structure DB]
-    B --> F[Local Sequence DB]
-```
-
-### Hosted async architecture
-
-```mermaid
-flowchart LR
-    A[Public Frontend] --> B[Hosted FastAPI]
-    B --> C[Persistent Job Record]
-    B --> D[Staged Uploads]
-    E[Worker Process] --> C
-    E --> F[Current Backend Engine]
-    F --> G[BLAST+]
-    F --> H[TM-align]
-    F --> I[Condensed Result Summary]
-    I --> J[Result Endpoint]
-    I --> K[Email Delivery or Preview]
-```
-
-### Execution modes
-
-- `local`
-  - hosted jobs run through the current backend engine on the same server
-- `hpc`
-  - stages request payloads over SSH and submits a remote Slurm wrapper
-
-The hosted scaffold supports local execution today and includes a configurable
-remote submission path for HPC environments that mirror the documented
-MedicineBow layout.
-
-## Core workflows
-
-### 1. Structure upload
-
-Primary endpoint:
-
-- `POST /api/process/structure`
-
-Flow:
-
-1. Accept `.pdb` or `.cif`
-2. Save upload temporarily
-3. Check whether the filename already exists in the local structure database
-4. If needed, run TM-align against the local structure database
-5. Return best match, TM-score, RMSD, and optional top matches
-
-### 2. Single sequence
-
-Primary endpoint:
-
-- `POST /api/process/sequence`
-
-Flow:
-
-1. Normalize the input sequence
-2. Run BLASTP against [`effector_sequences.fasta`](effector_sequences.fasta)
-3. Map the best hit to a local structure when possible
-4. Run TM-align when structure comparison is available
-5. Return classification, match details, and any deferred structure-generation
-   placeholder status
-
-### 3. Multi-FASTA
-
-Primary endpoint:
-
-- `POST /api/process/fasta`
-
-Flow:
-
-1. Parse the FASTA file into sequences
-2. Run the single-sequence logic per entry
-3. Return a per-sequence result list
-
-### 4. Hosted async jobs
-
-Primary endpoints:
-
-- `POST /jobs`
-- `POST /jobs/upload`
-- `GET /jobs`
-- `GET /jobs/{job_id}`
-- `GET /jobs/results/{job_id}`
-- `GET /jobs/mode`
-- `GET /health`
-
-Flow:
-
-1. Create a job
-2. Persist metadata and staged input
-3. Worker reserves queued jobs
-4. Worker executes the current backend engine through the hosted adapter
-5. Summary and raw results are stored
-6. Email is sent through SMTP or written as a preview file
-
-## Repository layout
-
-```text
-backend/
-  main.py                    # current synchronous biology engine
-  requirements.txt           # local demo/backend dependencies
-  requirements-hosted.txt    # hosted backend dependencies
-  config/
-  hosted_api/
-    main.py                 # hosted API entrypoint
-    worker.py               # DB-polling worker
-    config.py               # hosted runtime config
-    db.py                   # SQLAlchemy setup
-    models.py               # job persistence
-    schemas.py              # API schemas
-    routes/jobs.py          # hosted routes
-    services/               # adapter, execution, email, job runner
-frontend/
-  app/
-    page.tsx                # original synchronous demo UI
-    hosted/page.tsx         # hosted async UI
-Database/                    # local structure database
-effector_sequences.fasta     # local sequence database
-docs/
-  DISPATCHER_PRODUCT_PLAN.md
-deploy/
-  linux/                     # Linux backend deployment assets
-```
-
-## Quick start: local research demo
+## Quick Start
 
 ### Requirements
 
-- Python 3.10+
-- Node.js 18+
+- Python 3.10+ (3.12 recommended)
+- Node.js 18+ (24.x supported via Turbopack)
+- BLAST+ installed and on PATH
+- WSL with Ubuntu (for TM-align on Windows) **or** native TM-align binary
+- SSH access to Medicine Bow HPC (University of Wyoming ARCC)
 
-### Install
+### Run everything (one command)
 
 ```powershell
-cd backend
-py -3 -m pip install -r requirements.txt
-
-cd ..\frontend
-npm install
+.\start_app.bat
 ```
 
-### Run
-
-From the repository root:
+or
 
 ```powershell
 .\start_app.ps1
 ```
 
-Then open:
+This starts all 4 processes:
+- Demo backend on `http://localhost:8000`
+- Hosted API on `http://localhost:8001`
+- Worker process (polls for queued jobs)
+- Frontend on `http://localhost:3000`
 
-- frontend: `http://localhost:3000`
-- backend docs: `http://localhost:8000/docs`
+Then open **`http://localhost:3000`** — that's the production UI.
 
-This mode is best when you want to validate the biology pipeline locally and
-inspect structure and sequence behavior directly.
+---
 
-## Quick start: hosted async workflow
+## Architecture
 
-### Install backend dependencies
-
-```powershell
-cd backend
-py -3 -m pip install -r requirements-hosted.txt
+```
+Browser (localhost:3000)
+    ↓
+Next.js Frontend (Turbopack)
+    ↓
+Hosted API (port 8001) — creates + tracks jobs
+    ↓
+Worker — picks up queued jobs every 5s
+    ↓ SSH/SCP
+Medicine Bow HPC (medicinebow.arcc.uwyo.edu)
+    ↓ Slurm (teton partition — CPU, teton-gpu — AlphaFold)
+Compute node:
+    BLAST 2.16.0            — sequence search
+    TMalign (~/bin)         — structure comparison
+    ColabFold 1.5.5 (GPU)   — novel structure prediction
+    ↓ SCP results back
+Worker → DB → UI
 ```
 
-### Run the hosted API
+### Execution modes
 
-```powershell
-cd backend
-py -3 -m uvicorn hosted_api.main:app --reload
+Set in `backend/hosted_api/.env`:
+
+| Mode | What happens |
+|------|-------------|
+| `local` | Jobs run on your Windows machine (BLAST + TM-align via WSL) |
+| `hpc` | Jobs submitted to Medicine Bow via SSH/Slurm (**default, recommended**) |
+
+---
+
+## UI
+
+**`http://localhost:3000`** — main production UI with 3 tabs:
+
+| Tab | What it does |
+|-----|-------------|
+| Paste Sequence | BLAST search → TM-align → classification |
+| Upload Structure (PDB/CIF) | TM-align against 470 database structures |
+| Upload FASTA | Batch processing — one result per sequence |
+
+All tabs support optional email notification and AlphaFold prediction for novel
+sequences.
+
+**`http://localhost:3000/hosted`** — raw admin/debug view (job IDs, tokens, JSON).
+
+---
+
+## Repository Layout
+
+```
+backend/
+  main.py                        # synchronous biology engine (BLAST + TM-align)
+  requirements.txt               # demo backend deps
+  requirements-hosted.txt        # hosted backend deps (includes sqlalchemy, dotenv)
+  hosted_api/
+    main.py                      # hosted FastAPI app
+    worker.py                    # DB-polling worker (submits to HPC or runs locally)
+    config.py                    # settings loaded from .env
+    db.py                        # SQLAlchemy + SQLite setup
+    models.py                    # HostedJob model
+    schemas.py                   # Pydantic request/response schemas
+    routes/jobs.py               # job CRUD + polling endpoints
+    remote_runner.py             # entrypoint executed on Medicine Bow compute nodes
+    services/
+      pipeline_adapter.py        # bridges hosted jobs → backend/main.py pipeline
+      hpc_submission.py          # SSH/SCP/Slurm job submission
+      hpc_diagnostics.py         # remote host connectivity checks
+      alphafold_runner.py        # ColabFold via Apptainer container
+      job_runner.py              # local execution with heartbeat
+      execution.py               # mode resolver (local vs hpc)
+      rate_limit.py              # sliding-window rate limiter
+    tests/
+      test_hosted_api_unittest.py  # 5 contract tests
+frontend/
+  app/
+    page.tsx                     # main production UI (all 3 input types)
+    hosted/page.tsx              # admin/debug raw view
+    api/                         # Next.js mock API routes (demo fallback)
+  next.config.js                 # Turbopack config
+Database/                        # 470 curated effector PDB structures
+effector_sequences.fasta         # 464 effector sequences (BLAST database)
+deploy/
+  linux/                         # Linux server deployment templates
+  AZURE_VERCEL_MEDICINEBOW.md    # cloud + HPC deployment guide
+start_app.bat                    # Windows: start all 4 processes
+start_app.ps1                    # PowerShell: start all 4 processes
 ```
 
-### Run the worker
+---
 
-Open a second terminal:
+## Configuration
 
-```powershell
-cd backend
-py -3 -m hosted_api.worker
+Copy `backend/hosted_api/.env.example` → `backend/hosted_api/.env` and fill in:
+
+```env
+# Switch between local execution and HPC
+EFFECTOR_EXECUTION_MODE=hpc
+
+# Medicine Bow SSH host alias (must match ~/.ssh/config)
+EFFECTOR_HPC_REMOTE_HOST=medicinebow
+
+# Your UWyo paths
+EFFECTOR_HPC_REMOTE_EFFECTORS_ROOT=/home/<netid>/projects/Effectors
+EFFECTOR_HPC_REMOTE_RUNS_ROOT=/gscratch/<netid>/runs/effectors
+EFFECTOR_HPC_REMOTE_RESULTS_ROOT=/gscratch/<netid>/results/effectors
+EFFECTOR_HPC_REMOTE_LOGS_ROOT=/gscratch/<netid>/logs/effectors
+
+# Slurm
+EFFECTOR_HPC_SLURM_ACCOUNT=effectorfold
+EFFECTOR_HPC_SLURM_PARTITION=teton
+EFFECTOR_HPC_SLURM_PARTITION_GPU=teton-gpu
+
+# Module load prologue on compute nodes
+EFFECTOR_HPC_JOB_PROLOGUE=module load arcc/1.0 gcc/14.2.0 blast/2.16.0 python/3.12.0 colabfold/1.5.5 && export PATH=$HOME/bin:$PATH
+
+# AlphaFold via Apptainer container
+EFFECTOR_ALPHAFOLD_BIN=apptainer exec --nv --bind $CF_CACHE:/cache $CF_SIF colabfold_batch
+EFFECTOR_ALPHAFOLD_ARGS=--num-recycle 1 --num-models 1 --msa-mode single_sequence
+
+# Admin key for protected endpoints
+EFFECTOR_ADMIN_API_KEY=<your-secret>
 ```
 
-### Run the frontend
+### SSH config (`~/.ssh/config`)
 
-```powershell
-cd frontend
-npm install
-npm run dev
+```
+Host medicinebow
+    HostName medicinebow.arcc.uwyo.edu
+    User <your-netid>
+    IdentityFile ~/.ssh/medicinebow
+    CertificateFile ~/.ssh/medicinebow-cert.pub
+    IdentitiesOnly yes
+    BatchMode yes
 ```
 
-Open:
+### One-time Medicine Bow setup
 
-- demo UI: `http://localhost:3000`
-- hosted async UI: `http://localhost:3000/hosted`
+```bash
+# On Medicine Bow (via OnDemand shell):
+mkdir -p ~/projects ~/bin /gscratch/<netid>/{runs,results,logs}/effectors
 
-This is the correct path for a future public-facing deployment.
+# Compile TM-align (not available as a module)
+wget https://zhanggroup.org/TM-align/TMalign.cpp -O /tmp/TMalign.cpp
+g++ -O3 -o ~/bin/TMalign /tmp/TMalign.cpp
 
-## Linux deployment
+# Clone the repo
+git clone https://github.com/gokulsrinaths/Effectors ~/projects/Effectors
 
-Linux backend deployment assets are included under [`deploy/linux/`](deploy/linux).
+# Install Python deps
+module load arcc/1.0 gcc/14.2.0 python/3.12.0
+pip3 install --user fastapi pydantic sqlalchemy python-multipart uvicorn
+```
 
-Key files:
+---
 
-- [`deploy/linux/README.md`](deploy/linux/README.md)
-- [`deploy/linux/install_backend.sh`](deploy/linux/install_backend.sh)
-- [`deploy/linux/env.backend.example`](deploy/linux/env.backend.example)
-- [`deploy/linux/systemd/effectors-api.service`](deploy/linux/systemd/effectors-api.service)
-- [`deploy/linux/systemd/effectors-worker.service`](deploy/linux/systemd/effectors-worker.service)
-- [`deploy/linux/nginx/effectors-api.conf`](deploy/linux/nginx/effectors-api.conf)
+## HPC Diagnostics
 
-Recommended backend deployment shape:
+Verify Medicine Bow connectivity before submitting jobs:
 
-- Ubuntu VM
-- FastAPI hosted backend
-- separate worker process
-- nginx reverse proxy
-- HTTPS via certbot
+```bash
+curl -H "x-api-key: <ADMIN_KEY>" http://localhost:8001/jobs/hpc/diagnostics
+```
 
-The deployment templates currently assume:
+All fields should show `ok`. Expected output:
+```json
+{
+  "ok": true,
+  "stdout": "host=mblog1\nuser=...\nsbatch=ok\nsacct=ok\nrepo_dir=ok\nremote_runner=ok\nalphafold_bin=ok\npython3=ok\nbash=ok"
+}
+```
 
-- repo root at `/opt/effectors/Effectors`
-- backend running in `local` execution mode
+---
 
-## Status and roadmap
+## Status and Roadmap
 
-### Implemented
+### ✅ Completed and Working
 
-- Real BLAST integration
-- Real TM-align integration
-- Structure, sequence, and FASTA workflows in the original frontend
-- Hosted async API scaffold with persistent jobs
-- Local worker process for queued jobs
-- Staged uploads and result retrieval
-- SMTP-ready email layer with preview fallback
-- Linux backend deployment templates
-- Hosted runtime health endpoint
-- Upload-size and sequence-length guardrails
-- Retry-aware worker execution
-- Job-token gated public status/result access
-- Admin-key protection for admin-only hosted endpoints
-- In-memory rate limiting for public job creation
-- Worker lease/heartbeat recovery for stale jobs
+| Feature | Details |
+|---------|---------|
+| BLAST sequence search | BLAST 2.16.0, local effector FASTA database (464 sequences) |
+| TM-align structure comparison | 470 curated PDB structures, native binary on HPC |
+| Structure upload (PDB/CIF) | TM-align against full database |
+| Single sequence | BLAST → TM-align on best hit |
+| FASTA batch processing | Per-sequence BLAST + TM-align |
+| AlphaFold/ColabFold 1.5.5 | Novel sequences → GPU prediction on Medicine Bow |
+| HPC submission via SSH/Slurm | teton (CPU) + teton-gpu (GPU) partitions |
+| Async job queue + worker | SQLite-backed, polling every 5s, lease recovery |
+| Job access tokens + rate limiting | Per-job tokens, 30 req/min rate limit |
+| Admin API key protection | `/jobs` list, diagnostics, manual trigger |
+| Unified production UI | 3 tabs, email field, AlphaFold checkbox, results table |
+| Unit tests (5/5 passing) | Token gating, rate limit, upload validation, stale job recovery |
+| Start scripts (Windows) | `start_app.bat` / `start_app.ps1` — starts all 4 processes |
+| Linux deployment templates | systemd, nginx, install script in `deploy/linux/` |
+| Email notifications | SMTP or preview-file fallback |
 
-### Next major steps
+### ⏳ Pending / TODO
 
-- Extract reusable pipeline services from [`backend/main.py`](backend/main.py)
-- Add a stronger queueing system if throughput grows beyond the polling worker
-- Replace SQLite/local disk with managed Postgres plus object storage for multi-node deployment
+| Item | Priority | Notes |
+|------|----------|-------|
+| **Public hosting** | High | App runs locally only. Need a Linux VM with public IP to serve external users. Deploy guide at `deploy/AZURE_VERCEL_MEDICINEBOW.md`. Google Cloud / DigitalOcean free/cheap options work. |
+| **Frontend on Vercel** | High | Set `NEXT_PUBLIC_API_URL` to hosted server, deploy `frontend/` on Vercel. Free tier works. |
+| **SMTP email config** | Medium | Currently saves email previews to local files. Set `EFFECTOR_SMTP_HOST` etc. in `.env` to enable real delivery. |
+| **Postgres + object storage** | Low | SQLite + local disk is fine for single-server use. Replace with Postgres + S3/Azure Blob for multi-node or high-throughput. |
+| **Redis/queue worker** | Low | Polling worker is sufficient. Replace with Redis/RabbitMQ if job volume grows significantly. |
+| **User authentication** | Low | No login system. Anyone with the URL can submit jobs. Add if needed for access control. |
+| **Visualization (3D)** | Low | Currently returns a placeholder SVG. Wire up py3Dmol or ChimeraX for real 3D structure rendering. |
 
-## Important notes
+---
 
-- This repository is research infrastructure, not a finished clinical or
-  regulated product.
-- The current hosted path is suitable for controlled public deployment after
-  environment setup, but heavy compute should eventually move to HPC submission.
-- The synchronous demo remains the best place to debug biological logic before
-  routing jobs through hosted infrastructure.
+## API Reference
+
+### Hosted API (`localhost:8001`)
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/jobs` | — | Create sequence job |
+| POST | `/jobs/upload` | — | Create structure or FASTA job |
+| GET | `/jobs/{id}` | job token | Poll job status |
+| GET | `/jobs/results/{id}` | job token | Fetch completed results |
+| GET | `/jobs/files/{id}/alphafold` | job token | Download AlphaFold PDB |
+| GET | `/jobs` | admin key | List all jobs |
+| GET | `/jobs/hpc/diagnostics` | admin key | Check Medicine Bow connectivity |
+| GET | `/jobs/mode` | — | Current execution mode |
+| GET | `/health` | — | Service health and config |
+
+### Demo backend (`localhost:8000`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/process/structure` | Synchronous structure comparison |
+| POST | `/api/process/sequence` | Synchronous sequence search |
+| POST | `/api/process/fasta` | Synchronous batch FASTA |
+| GET | `/api/download/pdb` | Download a structure from the database |
+| GET | `/status` | Tool availability (BLAST, TM-align, WSL) |
+
+---
+
+## Notes
+
+- This is research infrastructure, not a clinical or regulated product.
+- The synchronous demo backend (`localhost:8000`) is useful for debugging biology
+  logic locally without the job queue overhead.
+- HPC mode requires your machine to be on and SSH-accessible to Medicine Bow when
+  jobs are submitted. For 24/7 unattended operation, run the worker on a server.
