@@ -21,9 +21,10 @@ function escapeXml(s: string) {
 
 export async function GET(
   _req: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const id = decodeURIComponent(params.id || 'demo')
+  const { id: rawId } = await params
+  const id = decodeURIComponent(rawId || 'demo')
   const title = escapeXml(id)
 
   // Simple inline SVG “structure” placeholder for demos.

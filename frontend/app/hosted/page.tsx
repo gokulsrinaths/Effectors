@@ -214,7 +214,7 @@ export default function HostedPage() {
   const alphaStatus = result?.alphafold?.status
 
   return (
-    <div className={styles.container}>
+    <div className={styles.container} suppressHydrationWarning>
 
       {/* Nav */}
       <nav className={styles.nav}>
