@@ -163,8 +163,14 @@ def run_real_pipeline(request_payload: dict[str, Any], result_path: Path) -> dic
         import logging as _log
         _log.getLogger(__name__).warning("ChimeraX step failed: %s", _exc)
 
+    # Only run AlphaFold for truly novel sequences (no good structural match found)
+    first_result = (processing_result.get("results") or [{}])[0]
+    tm_score = first_result.get("tm_score") or 0.0
+    classification = first_result.get("classification", "")
+    is_novel = tm_score < 0.5 or "novel" in classification.lower() or "missing" in classification.lower()
+
     alphafold_result: dict[str, Any] | None = None
-    if request.input_type == "sequence" and request.run_alphafold:
+    if request.input_type == "sequence" and request.run_alphafold and is_novel:
         from .alphafold_runner import run_alphafold_prediction  # noqa: WPS433
 
         alphafold_output_dir = result_path.parent / "alphafold" / str(job_id)

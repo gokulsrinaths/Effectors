@@ -29,6 +29,7 @@ interface HostedJob {
 interface HostedResult {
   processing_result?: {
     results?: Array<{
+      query_id?: string
       blast_result?: { e_value?: number; identity?: number; hit_id?: string }
       tm_align_result?: { tm_score?: number; rmsd?: number }
       classification?: string
@@ -419,6 +420,45 @@ export default function HostedPage() {
                 </div>
               )}
             </div>
+
+            {/* FASTA batch: all results table */}
+            {(result?.processing_result?.results?.length ?? 0) > 1 && (
+              <div className={styles.batchTable}>
+                <div className={styles.batchHeader}>
+                  <span className={styles.panelTitle}>All Sequences ({result!.processing_result!.results!.length})</span>
+                </div>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>Query ID</th>
+                      <th>Best Match</th>
+                      <th>TM-score</th>
+                      <th>E-value</th>
+                      <th>Classification</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result!.processing_result!.results!.map((r, i) => (
+                      <tr key={i}>
+                        <td style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>{r.query_id ?? '—'}</td>
+                        <td style={{ fontFamily: 'monospace', fontSize: '0.78rem', color: '#b8d4e8' }}>{r.best_match_id ?? '—'}</td>
+                        <td style={{ color: (r.tm_align_result?.tm_score ?? 0) >= 0.5 ? '#00c864' : (r.tm_align_result?.tm_score ?? 0) >= 0.3 ? '#f0a000' : '#ff4444' }}>
+                          {r.tm_align_result?.tm_score != null ? r.tm_align_result.tm_score.toFixed(3) : '—'}
+                        </td>
+                        <td style={{ color: '#7a9abf', fontSize: '0.8rem' }}>
+                          {r.blast_result?.e_value != null ? r.blast_result.e_value.toExponential(2) : '—'}
+                        </td>
+                        <td>
+                          <span className={`${styles.classificationBadge} ${classificationStyle(r.classification)}`}>
+                            {r.classification ?? '—'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {/* Structure image */}
             {structureImgUrl && (

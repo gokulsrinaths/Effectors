@@ -522,6 +522,51 @@
 .classSimilar { background: rgba(240,160,0,0.15); color: #f0a000; border: 1px solid rgba(240,160,0,0.3); }
 .classNovel  { background: rgba(255,50,50,0.12);  color: #ff6666; border: 1px solid rgba(255,50,50,0.3); }
 
+/* ── FASTA batch table ───────────────────────────────────────────────────── */
+
+.batchTable {
+  border-bottom: 1px solid rgba(99, 210, 255, 0.08);
+}
+
+.batchHeader {
+  padding: 12px 20px 10px;
+  background: rgba(0, 0, 0, 0.15);
+  border-bottom: 1px solid rgba(99, 210, 255, 0.06);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.table th {
+  padding: 10px 16px;
+  text-align: left;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #4a6080;
+  border-bottom: 1px solid rgba(99, 210, 255, 0.08);
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.table td {
+  padding: 10px 16px;
+  color: #b8d4e8;
+  border-bottom: 1px solid rgba(99, 210, 255, 0.05);
+  vertical-align: middle;
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.table tr:hover td {
+  background: rgba(0, 212, 255, 0.03);
+}
+
 /* ── Visualization panel ─────────────────────────────────────────────────── */
 
 .vizPanel {
