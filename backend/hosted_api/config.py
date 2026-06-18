@@ -51,6 +51,7 @@ class Settings:
     hpc_remote_logs_root: str
     hpc_slurm_account: str
     hpc_slurm_partition: str
+    hpc_slurm_partition_gpu: str
     hpc_slurm_time: str
     hpc_slurm_mem: str
     hpc_slurm_cpus: int
@@ -128,6 +129,7 @@ def get_settings() -> Settings:
         ),
         hpc_slurm_account=os.getenv("EFFECTOR_HPC_SLURM_ACCOUNT", "effectorfold"),
         hpc_slurm_partition=os.getenv("EFFECTOR_HPC_SLURM_PARTITION", ""),
+        hpc_slurm_partition_gpu=os.getenv("EFFECTOR_HPC_SLURM_PARTITION_GPU", "teton-gpu"),
         hpc_slurm_time=os.getenv("EFFECTOR_HPC_SLURM_TIME", "01:00:00"),
         hpc_slurm_mem=os.getenv("EFFECTOR_HPC_SLURM_MEM", "8G"),
         hpc_slurm_cpus=int(os.getenv("EFFECTOR_HPC_SLURM_CPUS", "2")),

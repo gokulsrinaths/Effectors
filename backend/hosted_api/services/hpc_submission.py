@@ -89,6 +89,12 @@ def _render_slurm_script(job: HostedJob, remote_request_path: str, *, run_alphaf
     )
     gpus = settings.hpc_slurm_gpus_alphafold if run_alphafold else settings.hpc_slurm_gpus
     gpu_line = f"#SBATCH --gres=gpu:{gpus}\n" if gpus > 0 else ""
+    # AlphaFold needs a GPU partition; regular jobs use the CPU partition
+    active_partition = (
+        settings.hpc_slurm_partition_gpu if (run_alphafold and gpus > 0)
+        else settings.hpc_slurm_partition
+    )
+    partition_line = f"#SBATCH --partition={active_partition}\n" if active_partition else ""
     remote_result_path = job.remote_result_path or ""
     remote_stdout_path = job.remote_stdout_path or ""
     remote_stderr_path = job.remote_stderr_path or ""
