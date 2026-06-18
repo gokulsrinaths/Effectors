@@ -109,6 +109,7 @@ def _render_slurm_script(job: HostedJob, remote_request_path: str, *, run_alphaf
             for line in [
                 f"export EFFECTOR_ALPHAFOLD_BIN={shlex.quote(settings.alphafold_bin)}",
                 f"export EFFECTOR_ALPHAFOLD_ARGS={shlex.quote(settings.alphafold_args)}",
+                f"export EFFECTOR_CHIMERAX_BIN={shlex.quote(settings.chimerax_bin)}",
             ]
             if line
         )
