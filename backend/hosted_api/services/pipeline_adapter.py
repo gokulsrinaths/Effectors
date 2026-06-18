@@ -21,6 +21,13 @@ def _load_engine_module():
         sys.path.insert(0, str(backend_root))
     import main as engine  # type: ignore
 
+    # Initialise BLAST/TM-align globals — these are set by validate_binaries()
+    # which the HTTP server calls at startup but is skipped on plain import.
+    try:
+        engine.validate_binaries()
+    except Exception:
+        pass  # degraded mode — individual callers check availability flags
+
     return engine
 
 
@@ -52,28 +59,75 @@ def _make_upload_file(path: Path, filename: str) -> UploadFile:
 
 
 def _run_sequence_job(engine, request: JobCreateRequest) -> dict[str, Any]:
+    """Call upload_sequence + classify, bypassing the background-task wrapper."""
+    import uuid
+    from datetime import datetime
+
     async def runner():
-        req = engine.SequenceRequest(
-            sequence=request.sequence or "",
-            sequence_id=request.sequence_id,
+        seq_result = await engine.upload_sequence(
+            request.sequence or "",
+            request.sequence_id,
         )
-        result = await engine.api_process_sequence(req)
-        return result.model_dump()
+        job_id = request.sequence_id or f"seq_{uuid.uuid4().hex[:8]}"
+        query_id = seq_result.query_id or job_id
+        classification = engine._classify_sequence_result(seq_result, query_id)
+        alphafold_queued = seq_result.status in ["novel_sequence", "structure_missing"]
+        processing_result = engine.ProcessingResult(
+            job_id=job_id,
+            status="completed",
+            results=[classification],
+            completed_at=datetime.now().isoformat(),
+            alphafold_queued=alphafold_queued,
+        )
+        return processing_result.model_dump()
 
     return asyncio.run(runner())
 
 
 def _run_structure_or_fasta_job(engine, request_payload: dict[str, Any]) -> dict[str, Any]:
+    import uuid
+    from datetime import datetime
+
     staged_path = Path(request_payload["staged_path"])
     original_filename = request_payload["original_filename"]
+    input_type = request_payload["input_type"]
     upload_file = _make_upload_file(staged_path, original_filename)
 
     async def runner():
-        if request_payload["input_type"] == "structure":
-            result = await engine.api_process_structure(upload_file)
+        job_id = f"{input_type}_{uuid.uuid4().hex[:8]}"
+        query_id = original_filename
+
+        if input_type == "structure":
+            match_result = await engine.upload_structure(upload_file)
+            classification = engine._classify_structure_result(
+                match_result, query_id.rsplit(".", 1)[0]
+            )
+            processing_result = engine.ProcessingResult(
+                job_id=job_id,
+                status="completed",
+                results=[classification],
+                completed_at=datetime.now().isoformat(),
+                alphafold_queued=False,
+            )
         else:
-            result = await engine.api_process_fasta(upload_file)
-        return result.model_dump()
+            # FASTA — convert MultiSequenceResult to ProcessingResult
+            multi_result = await engine.upload_multisequence(upload_file)
+            classification_results = []
+            alphafold_queued = False
+            for i, seq_result in enumerate(multi_result.results):
+                qid = seq_result.query_id or f"seq_{i+1}"
+                classification_results.append(engine._classify_sequence_result(seq_result, qid))
+                if seq_result.status in ["novel_sequence", "structure_missing"]:
+                    alphafold_queued = True
+            processing_result = engine.ProcessingResult(
+                job_id=job_id,
+                status="completed",
+                results=classification_results,
+                completed_at=datetime.now().isoformat(),
+                alphafold_queued=alphafold_queued,
+            )
+
+        return processing_result.model_dump()
 
     return asyncio.run(runner())
 

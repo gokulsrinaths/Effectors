@@ -553,18 +553,21 @@ def parse_tmalign_output(output: str) -> Optional[dict]:
     }
 
 
+_NATIVE_TMALIGN_CHECKED = False  # sentinel — probe only once per process
+
 def run_tmalign_binary(query_pdb: str, target_pdb: str, timeout: int = 30) -> Optional[dict]:
     """
     Execute TM-align to compare two structures.
 
     Prefers a native Windows/Linux TM-align binary when available and falls back
     to WSL only when that is the only available execution path.
-    
+
     Returns dict with 'tm_score', 'rmsd', and 'aligned_length', or None if execution failed.
     """
-    global TMALIGN_PATH
-    if not TMALIGN_PATH:
+    global TMALIGN_PATH, _NATIVE_TMALIGN_CHECKED
+    if not _NATIVE_TMALIGN_CHECKED:
         TMALIGN_PATH = check_tmalign_native()
+        _NATIVE_TMALIGN_CHECKED = True
     
     try:
         if TMALIGN_PATH:

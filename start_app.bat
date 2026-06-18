@@ -66,7 +66,7 @@ timeout /t 3 /nobreak >nul
 echo [3/4] Starting Job Worker...
 echo   Worker polls for queued jobs every 5s
 echo.
-start "Effector Pipeline - Worker" cmd /k "cd /d %~dp0 && %PYTHON_CMD% backend/hosted_api/worker.py"
+start "Effector Pipeline - Worker" cmd /k "cd /d %~dp0 && %PYTHON_CMD% -m backend.hosted_api.worker"
 timeout /t 2 /nobreak >nul
 
 echo [4/4] Starting Frontend (port 3000)...

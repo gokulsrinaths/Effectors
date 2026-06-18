@@ -86,7 +86,7 @@ Write-Host "[3/4] Starting Job Worker..." -ForegroundColor Green
 Write-Host "  Worker polls for queued jobs every 5s" -ForegroundColor Gray
 Write-Host ""
 
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$scriptDir'; $pythonCmd backend/hosted_api/worker.py"
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$scriptDir'; $pythonCmd -m backend.hosted_api.worker"
 Start-Sleep -Seconds 2
 
 Write-Host "[4/4] Starting Frontend (port 3000)..." -ForegroundColor Green
