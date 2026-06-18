@@ -66,40 +66,49 @@ try {
 Pop-Location
 Write-Host ""
 
-Write-Host "[1/2] Starting Backend Server..." -ForegroundColor Green
-Write-Host "Backend will be available at: http://localhost:8000" -ForegroundColor Gray
-Write-Host "API Docs: http://localhost:8000/docs" -ForegroundColor Gray
+Write-Host "[1/4] Starting Demo Backend (port 8000)..." -ForegroundColor Green
+Write-Host "  Demo API: http://localhost:8000" -ForegroundColor Gray
+Write-Host "  API Docs: http://localhost:8000/docs" -ForegroundColor Gray
 Write-Host ""
 
-# Start backend in new window
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$scriptDir\backend'; $pythonCmd main.py"
-
-# Wait for backend to start
 Start-Sleep -Seconds 3
 
-Write-Host "[2/2] Starting Frontend Server..." -ForegroundColor Green
-Write-Host "Frontend will be available at: http://localhost:3000" -ForegroundColor Gray
+Write-Host "[2/4] Starting Hosted API (port 8001)..." -ForegroundColor Green
+Write-Host "  Hosted API: http://localhost:8001" -ForegroundColor Gray
+Write-Host "  API Docs:   http://localhost:8001/docs" -ForegroundColor Gray
 Write-Host ""
 
-# Start frontend in new window
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$scriptDir'; $pythonCmd -m uvicorn backend.hosted_api.main:app --port 8001 --reload"
+Start-Sleep -Seconds 3
+
+Write-Host "[3/4] Starting Job Worker..." -ForegroundColor Green
+Write-Host "  Worker polls for queued jobs every 5s" -ForegroundColor Gray
+Write-Host ""
+
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$scriptDir'; $pythonCmd backend/hosted_api/worker.py"
+Start-Sleep -Seconds 2
+
+Write-Host "[4/4] Starting Frontend (port 3000)..." -ForegroundColor Green
+Write-Host "  Frontend: http://localhost:3000" -ForegroundColor Gray
+Write-Host ""
+
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$scriptDir\frontend'; npm run dev"
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Both servers are starting!" -ForegroundColor Cyan
+Write-Host "All 4 processes are starting!" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Backend:  http://localhost:8000" -ForegroundColor White
-Write-Host "Frontend: http://localhost:3000" -ForegroundColor White
+Write-Host "Demo UI:    http://localhost:3000       (mock demo)" -ForegroundColor White
+Write-Host "Hosted UI:  http://localhost:3000/hosted (real jobs)" -ForegroundColor White
+Write-Host "Demo API:   http://localhost:8000/docs" -ForegroundColor Gray
+Write-Host "Hosted API: http://localhost:8001/docs" -ForegroundColor Gray
 Write-Host ""
-Write-Host "Two PowerShell windows have opened:" -ForegroundColor Yellow
-Write-Host "  - One for backend (Python)" -ForegroundColor Gray
-Write-Host "  - One for frontend (Node.js)" -ForegroundColor Gray
-Write-Host ""
-Write-Host "Close those windows to stop the servers." -ForegroundColor Yellow
+Write-Host "Four PowerShell windows have opened. Close them to stop." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Waiting for servers to initialize..." -ForegroundColor Cyan
-Start-Sleep -Seconds 8
+Start-Sleep -Seconds 12
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green

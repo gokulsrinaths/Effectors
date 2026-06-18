@@ -51,37 +51,46 @@ if errorlevel 1 (
 cd ..
 echo.
 
-echo [1/2] Starting Backend Server...
-echo Backend will be available at: http://localhost:8000
-echo API Docs: http://localhost:8000/docs
+echo [1/4] Starting Demo Backend (port 8000)...
+echo   Demo API: http://localhost:8000
 echo.
-start "Effector Pipeline - Backend" cmd /k "cd /d %~dp0backend && %PYTHON_CMD% main.py"
-
-REM Wait a moment for backend to start
+start "Effector Pipeline - Demo Backend" cmd /k "cd /d %~dp0backend && %PYTHON_CMD% main.py"
 timeout /t 3 /nobreak >nul
 
-echo [2/2] Starting Frontend Server...
-echo Frontend will be available at: http://localhost:3000
+echo [2/4] Starting Hosted API (port 8001)...
+echo   Hosted API: http://localhost:8001
+echo.
+start "Effector Pipeline - Hosted API" cmd /k "cd /d %~dp0 && %PYTHON_CMD% -m uvicorn backend.hosted_api.main:app --port 8001 --reload"
+timeout /t 3 /nobreak >nul
+
+echo [3/4] Starting Job Worker...
+echo   Worker polls for queued jobs every 5s
+echo.
+start "Effector Pipeline - Worker" cmd /k "cd /d %~dp0 && %PYTHON_CMD% backend/hosted_api/worker.py"
+timeout /t 2 /nobreak >nul
+
+echo [4/4] Starting Frontend (port 3000)...
+echo   Frontend: http://localhost:3000
 echo.
 start "Effector Pipeline - Frontend" cmd /k "cd /d %~dp0frontend && npm run dev"
 
 echo.
 echo ========================================
-echo Both servers are starting!
+echo All 4 processes are starting!
 echo ========================================
 echo.
-echo Backend:  http://localhost:8000
-echo Frontend: http://localhost:3000
+echo Demo UI:    http://localhost:3000        (mock demo)
+echo Hosted UI:  http://localhost:3000/hosted (real jobs)
+echo Demo API:   http://localhost:8000/docs
+echo Hosted API: http://localhost:8001/docs
 echo.
-echo Two windows have opened - one for backend, one for frontend.
-echo Close those windows to stop the servers.
+echo Four windows opened. Close them to stop the servers.
 echo.
 echo Waiting for servers to initialize...
-timeout /t 5 /nobreak >nul
+timeout /t 12 /nobreak >nul
 
 echo.
-echo Servers should be ready now!
-echo Open your browser and go to: http://localhost:3000
+echo Servers should be ready. Open: http://localhost:3000
 echo.
 pause
 

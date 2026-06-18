@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional, Tuple
 import subprocess
+import sys
 import tempfile
 import os
 import json
@@ -139,13 +140,20 @@ def windows_to_wsl_path(windows_path: str) -> str:
 
 def check_binary(name: str) -> Optional[str]:
     """
-    Check if a binary is available in PATH.
+    Check if a binary is available in PATH or the project root.
     Returns absolute path if found, None otherwise.
-    Uses absolute paths for robustness - does not rely on shell PATH implicitly.
     """
+    # Check project root first — lets users drop a binary alongside the repo
+    # without modifying system PATH.
+    suffixes = ['.exe', ''] if sys.platform == 'win32' else ['', '.exe']
+    for suffix in suffixes:
+        local_path = (BASE_DIR / (name + suffix)).resolve()
+        if local_path.exists():
+            logger.info(f"Found {name} at {local_path} (project root)")
+            return str(local_path)
+
     binary_path = shutil.which(name)
     if binary_path:
-        # Convert to absolute path for robustness
         abs_path = pathlib.Path(binary_path).resolve()
         logger.info(f"Found {name} at {abs_path}")
         return str(abs_path)
