@@ -8,9 +8,13 @@ background-worker shape needed before introducing Redis or HPC submission.
 from __future__ import annotations
 
 from datetime import datetime, timezone, timedelta
+import logging
 import socket
 import time
+import traceback
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import or_, select
 
@@ -105,11 +109,26 @@ def main() -> None:
     print(f"execution_mode={settings.execution_mode}")
 
     while True:
-        refresh_active_hpc_jobs()
+        try:
+            refresh_active_hpc_jobs()
+        except Exception as exc:
+            logger.warning("refresh_active_hpc_jobs failed: %s", exc)
+
         job = reserve_next_job(worker_id)
         if job:
-            print(f"running_job={job.id}")
-            execute_reserved_job(job.id)
+            logger.info("running_job=%s", job.id)
+            try:
+                execute_reserved_job(job.id)
+            except Exception as exc:
+                # Catch any unhandled crash so the worker loop survives
+                tb = traceback.format_exc()
+                logger.error("Job %s crashed worker: %s\n%s", job.id, exc, tb)
+                with SessionLocal() as db:
+                    stuck = db.get(HostedJob, job.id)
+                    if stuck and stuck.status not in ("completed", "failed"):
+                        stuck.status = "failed"
+                        stuck.error_message = f"Worker crash: {exc}"
+                        db.commit()
         else:
             time.sleep(settings.worker_poll_interval)
 

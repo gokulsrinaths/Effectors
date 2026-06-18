@@ -4,17 +4,22 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import logging
 import re
 import shlex
 import subprocess
 import tempfile
+import time as _time
 from pathlib import Path
 
 from ..config import get_settings
 from ..models import HostedJob
 
+logger = logging.getLogger(__name__)
 
 SBATCH_ID_RE = re.compile(r"Submitted batch job (\d+)")
+_SSH_RETRIES = 3
+_SSH_RETRY_DELAY = 5  # seconds × attempt number
 
 
 def _utcnow() -> datetime:
@@ -24,15 +29,23 @@ def _utcnow() -> datetime:
 def _remote_exec(command: str) -> subprocess.CompletedProcess[str]:
     settings = get_settings()
     ssh_args = shlex.split(settings.hpc_ssh_args) if settings.hpc_ssh_args else []
-    # Run commands through bash so pipelines / compound commands behave
-    # consistently across clusters (and to match diagnostics behavior).
     remote_command = "bash -lc " + shlex.quote(command)
-    return subprocess.run(
-        [settings.hpc_ssh_bin, *ssh_args, settings.hpc_remote_host_alias, remote_command],
-        check=True,
-        text=True,
-        capture_output=True,
-    )
+    last_exc: Exception | None = None
+    for attempt in range(_SSH_RETRIES):
+        try:
+            return subprocess.run(
+                [settings.hpc_ssh_bin, *ssh_args, settings.hpc_remote_host_alias, remote_command],
+                check=True,
+                text=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            last_exc = exc
+            if attempt < _SSH_RETRIES - 1:
+                delay = _SSH_RETRY_DELAY * (attempt + 1)
+                logger.warning("SSH attempt %d/%d failed, retrying in %ds", attempt + 1, _SSH_RETRIES, delay)
+                _time.sleep(delay)
+    raise last_exc  # type: ignore[misc]
 
 
 def _remote_copy_text(remote_path: str, text_payload: str) -> None:

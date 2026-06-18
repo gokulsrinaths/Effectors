@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import styles from './page.module.css'
 
@@ -105,6 +105,11 @@ export default function HostedPage() {
   const [downloading, setDownloading] = useState(false)
   const [structureImgUrl, setStructureImgUrl] = useState<string | null>(null)
   const [rawOpen, setRawOpen]         = useState(false)
+  const [elapsedSecs, setElapsedSecs] = useState(0)
+  const [lastPayload, setLastPayload] = useState<Record<string, unknown> | null>(null)
+  const pollCountRef = useRef(0)
+  const startTimeRef = useRef(0)
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     setMounted(true)
@@ -125,11 +130,22 @@ export default function HostedPage() {
 
   useEffect(() => {
     if (!job || jobIsTerminal) return
-    const interval = window.setInterval(async () => {
+    pollCountRef.current = 0
+    startTimeRef.current = Date.now()
+
+    const schedulePoll = () => {
+      // Exponential backoff: 3s → 6s → 12s → 24s → cap at 30s
+      const delay = Math.min(3000 * Math.pow(2, Math.floor(pollCountRef.current / 3)), 30000)
+      pollTimerRef.current = setTimeout(doPoll, delay)
+    }
+
+    const doPoll = async () => {
+      setElapsedSecs(Math.floor((Date.now() - startTimeRef.current) / 1000))
       try {
         const r = await axios.get<HostedJob>(`${API_BASE_URL}${job.poll_path}`, {
           headers: accessToken ? { 'x-job-token': accessToken } : undefined,
         })
+        pollCountRef.current += 1
         setJob(r.data)
         if (r.data.status === 'completed' && r.data.result_path) {
           const rr = await axios.get<HostedResult>(`${API_BASE_URL}${r.data.result_path}`, {
@@ -137,32 +153,32 @@ export default function HostedPage() {
           })
           setResult(rr.data)
           setMessage('Job completed successfully.')
-          // Fetch structure preview image
           axios.get(`${API_BASE_URL}/jobs/files/${r.data.id}/structure-image`, {
             headers: { 'x-job-token': accessToken },
             responseType: 'blob',
           }).then(imgR => setStructureImgUrl(URL.createObjectURL(imgR.data))).catch(() => {})
         } else if (r.data.status === 'failed') {
           setMessage(`Job failed: ${r.data.error_message || 'Unknown error'}`)
+        } else {
+          schedulePoll()
         }
       } catch (err: any) {
-        setMessage(err?.message || 'Failed to poll job status.')
+        setMessage(`Poll error: ${err?.message || 'connection issue'} — retrying…`)
+        schedulePoll()
       }
-    }, 3000)
-    return () => window.clearInterval(interval)
-  }, [accessToken, job, jobIsTerminal])
+    }
+
+    schedulePoll()
+    return () => { if (pollTimerRef.current) clearTimeout(pollTimerRef.current) }
+  }, [accessToken, job?.id, jobIsTerminal])
 
   const handleSequenceSubmit = async () => {
     if (!sequence.trim()) { setMessage('Sequence input is required.'); return }
-    setSubmitting(true); setResult(null); setStructureImgUrl(null)
+    const payload = { input_type: 'sequence', email: email || undefined, sequence: sequence.trim(), sequence_id: sequenceId || undefined, run_alphafold: runAlphafold }
+    setLastPayload(payload)
+    setSubmitting(true); setResult(null); setStructureImgUrl(null); setElapsedSecs(0)
     try {
-      const r = await axios.post<HostedJob>(`${API_BASE_URL}/jobs`, {
-        input_type: 'sequence',
-        email: email || undefined,
-        sequence: sequence.trim(),
-        sequence_id: sequenceId || undefined,
-        run_alphafold: runAlphafold,
-      })
+      const r = await axios.post<HostedJob>(`${API_BASE_URL}/jobs`, payload)
       setJob(r.data)
       setAccessToken(r.data.access_token || '')
       setMessage(`Job ${r.data.id} queued — worker will pick it up automatically.`)
@@ -175,7 +191,7 @@ export default function HostedPage() {
 
   const handleUploadSubmit = async () => {
     if (!uploadFile) { setMessage('Choose a file before submitting.'); return }
-    setSubmitting(true); setResult(null); setStructureImgUrl(null)
+    setSubmitting(true); setResult(null); setStructureImgUrl(null); setElapsedSecs(0)
     const form = new FormData()
     form.append('input_type', uploadType)
     if (email) form.append('email', email)
@@ -189,6 +205,22 @@ export default function HostedPage() {
       setMessage(`Job ${r.data.id} queued — worker will pick it up automatically.`)
     } catch (err: any) {
       setMessage(err?.response?.data?.detail || err?.message || 'Failed to create job.')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleRetry = async () => {
+    if (!lastPayload) return
+    setResult(null); setStructureImgUrl(null); setElapsedSecs(0); setMessage('')
+    setSubmitting(true)
+    try {
+      const r = await axios.post<HostedJob>(`${API_BASE_URL}/jobs`, lastPayload)
+      setJob(r.data)
+      setAccessToken(r.data.access_token || '')
+      setMessage(`Retry job ${r.data.id} queued.`)
+    } catch (err: any) {
+      setMessage(err?.response?.data?.detail || err?.message || 'Retry failed.')
     } finally {
       setSubmitting(false)
     }
@@ -361,6 +393,12 @@ export default function HostedPage() {
             </div>
             <div className={styles.terminalBody}>
               {message && <div className={styles.termMsg}>{'> '}{message}</div>}
+              {job && !jobIsTerminal && elapsedSecs > 0 && (
+                <div className={styles.termRow}>
+                  <span className={styles.termKey}>elapsed</span>
+                  <span className={styles.termVal}>{Math.floor(elapsedSecs / 60)}:{String(elapsedSecs % 60).padStart(2, '0')}</span>
+                </div>
+              )}
               {job && (
                 <>
                   <div className={styles.termRow}><span className={styles.termKey}>job_id</span><span className={styles.termVal}>{job.id}</span></div>
@@ -370,6 +408,13 @@ export default function HostedPage() {
                   {job.started_at  && <div className={styles.termRow}><span className={styles.termKey}>started_at</span><span className={styles.termVal}>{job.started_at}</span></div>}
                   {job.completed_at && <div className={styles.termRow}><span className={styles.termKey}>completed_at</span><span className={styles.termVal}>{job.completed_at}</span></div>}
                   {job.error_message && <div className={styles.termRow}><span className={styles.termKey}>error</span><span className={styles.termVal} style={{ color: '#ff6666' }}>{job.error_message}</span></div>}
+                  {job.status === 'failed' && lastPayload?.input_type === 'sequence' && (
+                    <div style={{ marginTop: 12 }}>
+                      <button className={styles.secondaryBtn} onClick={handleRetry} disabled={submitting}>
+                        ↻ Retry
+                      </button>
+                    </div>
+                  )}
                 </>
               )}
             </div>

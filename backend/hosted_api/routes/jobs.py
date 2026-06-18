@@ -6,9 +6,14 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
+import re as _re
+
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+
+_AA_RE = _re.compile(r'^[ACDEFGHIKLMNPQRSTVWYBXZUO\-\s]+$', _re.IGNORECASE)
+_EMAIL_RE = _re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
 from ..config import get_settings
 from ..db import get_db
@@ -105,6 +110,11 @@ def create_job(
         raise HTTPException(status_code=400, detail="Sequence input is required for sequence jobs.")
     if len(request.sequence) > settings.max_sequence_chars:
         raise HTTPException(status_code=400, detail="Sequence input exceeds the configured maximum length.")
+    clean_seq = request.sequence.replace(" ", "").replace("\n", "").replace("\r", "")
+    if not _AA_RE.match(clean_seq):
+        raise HTTPException(status_code=400, detail="Sequence contains invalid characters. Only standard amino acid letters are accepted.")
+    if request.email and not _EMAIL_RE.match(request.email):
+        raise HTTPException(status_code=400, detail="Invalid email address format.")
 
     job_id = uuid4().hex
     access_token = issue_job_access_token()
@@ -138,6 +148,8 @@ async def create_upload_job(
 ) -> JobResponse:
     if input_type not in {"structure", "fasta"}:
         raise HTTPException(status_code=400, detail="input_type must be 'structure' or 'fasta'.")
+    if email and not _EMAIL_RE.match(email):
+        raise HTTPException(status_code=400, detail="Invalid email address format.")
 
     settings = get_settings()
     settings.uploads_dir.mkdir(parents=True, exist_ok=True)

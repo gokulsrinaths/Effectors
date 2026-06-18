@@ -186,6 +186,9 @@ def run_real_pipeline(request_payload: dict[str, Any], result_path: Path) -> dic
         "summary": _build_summary(processing_result),
     }
     if alphafold_result is not None:
+        # Validate alphafold result has expected shape before persisting
+        if not isinstance(alphafold_result, dict) or alphafold_result.get("status") not in ("completed", "failed"):
+            alphafold_result = {"status": "failed", "error_message": "Unexpected AlphaFold output format", "requested": True}
         result["alphafold"] = alphafold_result
     if structure_image_path is not None:
         result["structure_image_path"] = structure_image_path

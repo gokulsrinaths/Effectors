@@ -103,10 +103,14 @@ export default function Home() {
   const [runAlphafold, setRunAlphafold] = useState(false)
   const [processing, setProcessing] = useState(false)
   const [results, setResults] = useState<ClassificationResult[]>([])
+  const [noResults, setNoResults] = useState(false)
   const [toasts, setToasts] = useState<Toast[]>([])
   const [processingSteps, setProcessingSteps] = useState<{ label: string; status: StepStatus }[]>([])
   const [jobInfo, setJobInfo] = useState<{ id: string; token: string } | null>(null)
+  const [elapsedSecs, setElapsedSecs] = useState(0)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const startTimeRef = useRef<number>(0)
+  const pollFailuresRef = useRef(0)
 
   // Clean up polling on unmount
   useEffect(() => {
@@ -145,20 +149,24 @@ export default function Home() {
 
   function startPolling(jobId: string, token: string, inputType: string) {
     if (pollRef.current) clearInterval(pollRef.current)
+    startTimeRef.current = Date.now()
+    pollFailuresRef.current = 0
+    setElapsedSecs(0)
 
     pollRef.current = setInterval(async () => {
+      setElapsedSecs(Math.floor((Date.now() - startTimeRef.current) / 1000))
       try {
         const { data: job } = await axios.get<JobResponse>(
           `${HOSTED_API}/jobs/${jobId}`,
           { headers: { 'x-job-token': token } }
         )
+        pollFailuresRef.current = 0
 
         advanceStep(statusToStepIndex(job.status))
 
         if (job.status === 'completed') {
           clearInterval(pollRef.current!)
           completeSteps()
-          // Fetch actual results
           try {
             const { data: resultData } = await axios.get<JobResult>(
               `${HOSTED_API}/jobs/results/${jobId}`,
@@ -166,8 +174,9 @@ export default function Home() {
             )
             const resultsList = resultData.processing_result?.results ?? []
             if (resultsList.length === 0) {
-              addToast('warning', 'No Results', 'Job completed but returned no result items.')
+              setNoResults(true)
             } else {
+              setNoResults(false)
               setResults(resultsList)
               const alphafoldQ = resultData.processing_result?.alphafold_queued
               if (alphafoldQ) {
@@ -187,7 +196,12 @@ export default function Home() {
           addToast('error', 'Job Failed', job.error_message || 'Unknown error during processing.')
         }
       } catch {
-        // transient network error — keep polling
+        pollFailuresRef.current += 1
+        if (pollFailuresRef.current >= 3) {
+          clearInterval(pollRef.current!)
+          setProcessing(false)
+          addToast('error', 'Connection Lost', 'Lost contact with server after 3 attempts. Refresh the page to check job status.')
+        }
       }
     }, 2000)
   }
@@ -201,6 +215,7 @@ export default function Home() {
     }
     setProcessing(true)
     setResults([])
+    setNoResults(false)
     setJobInfo(null)
     initSteps('sequence')
 
@@ -226,6 +241,7 @@ export default function Home() {
   async function handleFileUpload(file: File, inputType: 'structure' | 'fasta') {
     setProcessing(true)
     setResults([])
+    setNoResults(false)
     setJobInfo(null)
     initSteps(inputType)
 
@@ -470,9 +486,24 @@ export default function Home() {
             </div>
             {jobInfo && (
               <p style={{ marginTop: 14, fontSize: '0.8rem', color: '#6c757d', fontFamily: 'monospace' }}>
-                job_id: {jobInfo.id}
+                job_id: {jobInfo.id} &nbsp;·&nbsp; elapsed: {Math.floor(elapsedSecs / 60)}:{String(elapsedSecs % 60).padStart(2, '0')}
               </p>
             )}
+          </section>
+        )}
+
+        {/* Empty results state */}
+        {noResults && (
+          <section className={styles.statusPanel}>
+            <h2>No Classification Found</h2>
+            <p style={{ color: '#6c757d', fontSize: '0.9rem', marginTop: 8 }}>
+              The job completed but returned no results. This can happen if:
+            </p>
+            <ul style={{ color: '#6c757d', fontSize: '0.9rem', marginTop: 8, paddingLeft: 20 }}>
+              <li>The sequence had no BLAST hit in the effector database</li>
+              <li>The uploaded structure could not be parsed by TM-align</li>
+              <li>The FASTA file contained no valid sequences</li>
+            </ul>
           </section>
         )}
 
