@@ -38,8 +38,10 @@ def _remote_exec(command: str) -> subprocess.CompletedProcess[str]:
 def _remote_copy_text(remote_path: str, text_payload: str) -> None:
     settings = get_settings()
     scp_args = shlex.split(settings.hpc_scp_args) if settings.hpc_scp_args else []
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
-        handle.write(text_payload)
+    # Write binary so Windows doesn't convert \n → \r\n (sbatch rejects CRLF scripts).
+    payload_bytes = text_payload.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+    with tempfile.NamedTemporaryFile("wb", delete=False) as handle:
+        handle.write(payload_bytes)
         local_path = Path(handle.name)
     try:
         subprocess.run(
@@ -124,7 +126,7 @@ REMOTE_RESULT_PATH={shlex.quote(remote_result_path)}
 
 mkdir -p "$(dirname "$REMOTE_RESULT_PATH")"
 cd "$REMOTE_REPO_ROOT"
-{shlex.quote(settings.hpc_python_bin)} backend/hosted_api/remote_runner.py \
+{settings.hpc_python_bin} backend/hosted_api/remote_runner.py \
   --request "$REMOTE_REQUEST_PATH" \
   --result "$REMOTE_RESULT_PATH"
 {epilogue_block}
@@ -175,11 +177,18 @@ def submit_hpc_job(job: HostedJob, request_payload: dict) -> HostedJob:
             )
         )
 
+    # Set paths on job BEFORE rendering the script so _render_slurm_script can read them.
+    job.remote_run_dir = remote_run_dir
+    job.remote_result_path = remote_result_path
+    job.remote_stdout_path = remote_stdout_path
+    job.remote_stderr_path = remote_stderr_path
+
     _remote_copy_text(remote_request_path, json.dumps(request_payload, indent=2, sort_keys=True) + "\n")
-    _remote_copy_text(
-        remote_script_path,
-        _render_slurm_script(job, remote_request_path, run_alphafold=bool(request_payload.get("run_alphafold"))),
-    )
+    # Force Unix line endings — sbatch rejects CRLF scripts from Windows machines.
+    slurm_script = _render_slurm_script(
+        job, remote_request_path, run_alphafold=bool(request_payload.get("run_alphafold"))
+    ).replace("\r\n", "\n").replace("\r", "\n")
+    _remote_copy_text(remote_script_path, slurm_script)
     _remote_exec(f"chmod 700 {shlex.quote(remote_script_path)}")
 
     submit_result = _remote_exec(
@@ -190,10 +199,6 @@ def submit_hpc_job(job: HostedJob, request_payload: dict) -> HostedJob:
         raise RuntimeError(f"Unable to parse sbatch output: {submit_result.stdout.strip()}")
 
     job.remote_job_id = match.group(1)
-    job.remote_run_dir = remote_run_dir
-    job.remote_result_path = remote_result_path
-    job.remote_stdout_path = remote_stdout_path
-    job.remote_stderr_path = remote_stderr_path
     job.status = "submitted"
     job.last_heartbeat_at = _utcnow()
     job.reservation_expires_at = None

@@ -60,7 +60,9 @@ def run_hpc_diagnostics() -> dict[str, Any]:
         + f"test -d {shlex.quote(remote_repo)} && echo \"repo_dir=ok\" || echo \"repo_dir=missing\" ; "
         + f"test -f {shlex.quote(remote_repo + '/backend/hosted_api/remote_runner.py')} "
         + "&& echo \"remote_runner=ok\" || echo \"remote_runner=missing\" ; "
-        + f"command -v {shlex.quote(alphafold_bin)} >/dev/null 2>&1 "
+        # For compound commands (e.g. "apptainer exec ... colabfold_batch"), check
+        # the first token only — that's the actual executable.
+        + f"command -v {shlex.quote(alphafold_bin.split()[0])} >/dev/null 2>&1 "
         + "&& echo \"alphafold_bin=ok\" || echo \"alphafold_bin=missing\" ; "
         + "command -v python3 >/dev/null 2>&1 && echo \"python3=ok\" || echo \"python3=missing\" ; "
         + "command -v bash >/dev/null 2>&1 && echo \"bash=ok\" || echo \"bash=missing\" ; "
