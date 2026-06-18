@@ -11,6 +11,23 @@
   padding: 0 0 64px;
 }
 
+/* Override globals.css heading colors for dark theme */
+.container h1,
+.container h2,
+.container h3,
+.container h4 {
+  color: #e2eaf6;
+  margin-bottom: 0;
+}
+
+/* Override globals.css input/select appearance resets */
+.container input,
+.container select,
+.container textarea,
+.container button {
+  font-family: inherit;
+}
+
 /* ── Top nav bar ─────────────────────────────────────────────────────────── */
 
 .nav {
@@ -238,8 +255,14 @@
   box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.12);
 }
 
-.input::placeholder {
+.input::placeholder,
+.textarea::placeholder {
   color: #3a4a5e;
+}
+
+.select option {
+  background: #0d1321;
+  color: #e2eaf6;
 }
 
 .textarea {

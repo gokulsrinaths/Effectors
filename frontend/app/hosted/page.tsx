@@ -105,7 +105,13 @@ export default function HostedPage() {
   const [structureImgUrl, setStructureImgUrl] = useState<string | null>(null)
   const [rawOpen, setRawOpen]         = useState(false)
 
-  useEffect(() => { setMounted(true) }, [])
+  useEffect(() => {
+    setMounted(true)
+    // Override body background for dark theme (globals.css sets white)
+    const prev = document.body.style.backgroundColor
+    document.body.style.backgroundColor = '#0a0e1a'
+    return () => { document.body.style.backgroundColor = prev }
+  }, [])
 
   const jobIsTerminal = useMemo(
     () => job?.status === 'completed' || job?.status === 'failed',
@@ -216,7 +222,7 @@ export default function HostedPage() {
   const classification = firstResult?.classification ?? (result?.summary?.classification as string | undefined)
   const alphaStatus = result?.alphafold?.status
 
-  if (!mounted) return null
+  if (!mounted) return <div style={{ minHeight: '100vh', background: '#0a0e1a' }} />
 
   return (
     <div className={styles.container}>
