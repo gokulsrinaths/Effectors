@@ -87,6 +87,7 @@ function fmtEval(v?: number): string {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function HostedPage() {
+  const [mounted, setMounted]         = useState(false)
   const [activeTab, setActiveTab]     = useState<'sequence' | 'upload'>('sequence')
   const [email, setEmail]             = useState('')
   const [sequenceId, setSequenceId]   = useState('')
@@ -103,6 +104,8 @@ export default function HostedPage() {
   const [downloading, setDownloading] = useState(false)
   const [structureImgUrl, setStructureImgUrl] = useState<string | null>(null)
   const [rawOpen, setRawOpen]         = useState(false)
+
+  useEffect(() => { setMounted(true) }, [])
 
   const jobIsTerminal = useMemo(
     () => job?.status === 'completed' || job?.status === 'failed',
@@ -213,8 +216,10 @@ export default function HostedPage() {
   const classification = firstResult?.classification ?? (result?.summary?.classification as string | undefined)
   const alphaStatus = result?.alphafold?.status
 
+  if (!mounted) return null
+
   return (
-    <div className={styles.container} suppressHydrationWarning>
+    <div className={styles.container}>
 
       {/* Nav */}
       <nav className={styles.nav}>

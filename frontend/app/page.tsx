@@ -95,6 +95,7 @@ function statusToStepIndex(status: string): number {
 // ─── Main component ──────────────────────────────────────────────────────────
 
 export default function Home() {
+  const [mounted, setMounted] = useState(false)
   const [activeTab, setActiveTab] = useState<'structure' | 'sequence' | 'fasta'>('sequence')
   const [email, setEmail] = useState('')
   const [sequenceInput, setSequenceInput] = useState('')
@@ -109,6 +110,7 @@ export default function Home() {
 
   // Clean up polling on unmount
   useEffect(() => {
+    setMounted(true)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [])
 
@@ -268,6 +270,8 @@ export default function Home() {
   }
 
   // ── Render ───────────────────────────────────────────────────────────────
+
+  if (!mounted) return null
 
   return (
     <div className={styles.container}>
