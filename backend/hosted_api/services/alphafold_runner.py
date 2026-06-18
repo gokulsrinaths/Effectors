@@ -41,13 +41,17 @@ def run_alphafold_prediction(*, sequence_id: str, sequence: str, output_dir: Pat
     _write_fasta(sequence_id, sequence, fasta_path)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    cmd = [alphafold_bin, str(fasta_path), str(output_dir)]
-    if extra_args:
-        cmd.extend(shlex.split(extra_args))
+    # Build the full shell command string with positional args appended.
+    # We use bash -c so that:
+    #   1. Compound commands like "apptainer exec --nv $CF_SIF colabfold_batch" work.
+    #   2. Shell variables set by module-load (e.g. $CF_SIF, $CF_CACHE) are expanded.
+    positional = f"{shlex.quote(str(fasta_path))} {shlex.quote(str(output_dir))}"
+    extra = f" {extra_args}" if extra_args else ""
+    shell_cmd = f"{alphafold_bin} {positional}{extra}"
 
     try:
         completed = subprocess.run(
-            cmd,
+            ["bash", "-c", shell_cmd],
             check=True,
             text=True,
             capture_output=True,
