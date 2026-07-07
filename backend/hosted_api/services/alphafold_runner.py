@@ -19,10 +19,18 @@ def _write_fasta(sequence_id: str, sequence: str, fasta_path: Path) -> None:
 
 
 def _pick_predicted_pdb(output_dir: Path) -> Path | None:
+    """Return the highest-pLDDT model (rank_001 in ColabFold naming)."""
     if not output_dir.exists():
         return None
-    candidates = sorted(output_dir.rglob("*.pdb"))
-    return candidates[0] if candidates else None
+    candidates = list(output_dir.rglob("*.pdb"))
+    if not candidates:
+        return None
+    # ColabFold names models: *_rank_001_*.pdb (rank 1 = highest pLDDT)
+    rank1 = [p for p in candidates if "rank_001" in p.name or "rank_1" in p.name]
+    if rank1:
+        return rank1[0]
+    # Fallback: alphabetical first (001 < 002 so still rank 1)
+    return sorted(candidates)[0]
 
 
 def run_alphafold_prediction(*, sequence_id: str, sequence: str, output_dir: Path) -> dict:

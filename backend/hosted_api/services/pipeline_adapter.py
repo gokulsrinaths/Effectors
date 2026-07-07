@@ -58,30 +58,66 @@ def _make_upload_file(path: Path, filename: str) -> UploadFile:
     return UploadFile(file=temp, filename=filename)
 
 
-def _run_sequence_job(engine, request: JobCreateRequest) -> dict[str, Any]:
-    """Call upload_sequence + classify, bypassing the background-task wrapper."""
+def _run_sequence_job(engine, request: JobCreateRequest) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """fc5 sequence path: AlphaFold → highest pLDDT PDB → TM-align all DB structures.
+
+    Returns (processing_result_dict, alphafold_result_dict_or_None).
+    Falls back to BLAST if AlphaFold binary is unavailable.
+    """
     import uuid
     from datetime import datetime
+    from .alphafold_runner import run_alphafold_prediction, _pick_predicted_pdb
 
-    async def runner():
-        seq_result = await engine.upload_sequence(
-            request.sequence or "",
-            request.sequence_id,
-        )
-        job_id = request.sequence_id or f"seq_{uuid.uuid4().hex[:8]}"
-        query_id = seq_result.query_id or job_id
+    sequence_id = request.sequence_id or f"seq_{uuid.uuid4().hex[:8]}"
+    sequence = request.sequence or ""
+
+    # Step 1 — AlphaFold prediction
+    import tempfile
+    af_output_dir = Path(tempfile.mkdtemp()) / sequence_id
+    af_result = run_alphafold_prediction(
+        sequence_id=sequence_id,
+        sequence=sequence,
+        output_dir=af_output_dir,
+    )
+
+    if af_result.get("status") == "completed":
+        # Step 2 — Pick highest pLDDT model (rank_001 = first alphabetically)
+        best_pdb = _pick_predicted_pdb(af_output_dir)
+        if best_pdb:
+            # Step 3 — TM-align predicted structure against all DB structures
+            upload_file = _make_upload_file(best_pdb, f"{sequence_id}.pdb")
+
+            async def runner_af():
+                match_result = await engine.upload_structure(upload_file)
+                classification = engine._classify_structure_result(match_result, sequence_id)
+                result = engine.ProcessingResult(
+                    job_id=sequence_id,
+                    status="completed",
+                    results=[classification],
+                    completed_at=datetime.now().isoformat(),
+                    alphafold_queued=False,
+                )
+                return result.model_dump()
+
+            return asyncio.run(runner_af()), af_result
+
+    # Fallback — AlphaFold unavailable or failed; try BLAST path
+    async def runner_blast():
+        seq_result = await engine.upload_sequence(sequence, sequence_id)
+        query_id = seq_result.query_id or sequence_id
         classification = engine._classify_sequence_result(seq_result, query_id)
         alphafold_queued = seq_result.status in ["novel_sequence", "structure_missing"]
-        processing_result = engine.ProcessingResult(
-            job_id=job_id,
+        result = engine.ProcessingResult(
+            job_id=sequence_id,
             status="completed",
             results=[classification],
             completed_at=datetime.now().isoformat(),
             alphafold_queued=alphafold_queued,
         )
-        return processing_result.model_dump()
+        return result.model_dump()
 
-    return asyncio.run(runner())
+    af_failure = af_result if af_result.get("status") == "failed" else None
+    return asyncio.run(runner_blast()), af_failure
 
 
 def _run_structure_or_fasta_job(engine, request_payload: dict[str, Any]) -> dict[str, Any]:
@@ -110,21 +146,56 @@ def _run_structure_or_fasta_job(engine, request_payload: dict[str, Any]) -> dict
                 alphafold_queued=False,
             )
         else:
-            # FASTA — convert MultiSequenceResult to ProcessingResult
-            multi_result = await engine.upload_multisequence(upload_file)
+            # FASTA — fc5 path: AlphaFold each sequence → TM-align
+            from .alphafold_runner import run_alphafold_prediction, _pick_predicted_pdb
+            import tempfile as _tmpmod
+
+            fasta_text = staged_path.read_text(encoding="utf-8")
+            sequences: list[dict[str, str]] = []
+            cur_id, cur_lines = None, []
+            for line in fasta_text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith(">"):
+                    if cur_id and cur_lines:
+                        sequences.append({"id": cur_id, "sequence": "".join(cur_lines)})
+                    cur_id = line[1:].split()[0] if line[1:] else f"seq_{len(sequences)+1}"
+                    cur_lines = []
+                else:
+                    cur_lines.append(line)
+            if cur_id and cur_lines:
+                sequences.append({"id": cur_id, "sequence": "".join(cur_lines)})
+
             classification_results = []
-            alphafold_queued = False
-            for i, seq_result in enumerate(multi_result.results):
-                qid = seq_result.query_id or f"seq_{i+1}"
-                classification_results.append(engine._classify_sequence_result(seq_result, qid))
-                if seq_result.status in ["novel_sequence", "structure_missing"]:
-                    alphafold_queued = True
+            for seq in sequences:
+                af_dir = Path(_tmpmod.mkdtemp()) / seq["id"]
+                af_res = run_alphafold_prediction(
+                    sequence_id=seq["id"],
+                    sequence=seq["sequence"],
+                    output_dir=af_dir,
+                )
+                if af_res.get("status") == "completed":
+                    best_pdb = _pick_predicted_pdb(af_dir)
+                    if best_pdb:
+                        uf = _make_upload_file(best_pdb, f"{seq['id']}.pdb")
+                        match_result = await engine.upload_structure(uf)
+                        classification_results.append(
+                            engine._classify_structure_result(match_result, seq["id"])
+                        )
+                        continue
+                # Fallback for this sequence if AlphaFold failed
+                seq_result = await engine.upload_sequence(seq["sequence"], seq["id"])
+                classification_results.append(
+                    engine._classify_sequence_result(seq_result, seq["id"])
+                )
+
             processing_result = engine.ProcessingResult(
                 job_id=job_id,
                 status="completed",
                 results=classification_results,
                 completed_at=datetime.now().isoformat(),
-                alphafold_queued=alphafold_queued,
+                alphafold_queued=False,
             )
 
         return processing_result.model_dump()
@@ -138,8 +209,9 @@ def run_real_pipeline(request_payload: dict[str, Any], result_path: Path) -> dic
     request = JobCreateRequest.model_validate(request_payload)
     job_id = request_payload.get("job_id") or result_path.stem
 
+    alphafold_result: dict[str, Any] | None = None
     if request.input_type == "sequence":
-        processing_result = _run_sequence_job(engine, request)
+        processing_result, alphafold_result = _run_sequence_job(engine, request)
     else:
         processing_result = _run_structure_or_fasta_job(engine, request_payload)
 
@@ -163,23 +235,8 @@ def run_real_pipeline(request_payload: dict[str, Any], result_path: Path) -> dic
         import logging as _log
         _log.getLogger(__name__).warning("ChimeraX step failed: %s", _exc)
 
-    # Only run AlphaFold for truly novel sequences (no good structural match found)
-    first_result = (processing_result.get("results") or [{}])[0]
-    tm_score = first_result.get("tm_score") or 0.0
-    classification = first_result.get("classification", "")
-    is_novel = tm_score < 0.5 or "novel" in classification.lower() or "missing" in classification.lower()
-
-    alphafold_result: dict[str, Any] | None = None
-    if request.input_type == "sequence" and request.run_alphafold and is_novel:
-        from .alphafold_runner import run_alphafold_prediction  # noqa: WPS433
-
-        alphafold_output_dir = result_path.parent / "alphafold" / str(job_id)
-        sequence_id = request.sequence_id or job_id
-        alphafold_result = run_alphafold_prediction(
-            sequence_id=sequence_id,
-            sequence=request.sequence or "",
-            output_dir=alphafold_output_dir,
-        )
+    # AlphaFold already ran (if sequence input) inside _run_sequence_job.
+    # For structure/fasta uploads, no separate AlphaFold step needed here.
 
     result = {
         "processing_result": processing_result,
