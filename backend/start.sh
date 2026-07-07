@@ -25,6 +25,11 @@ Host medicinebow
 EOF
 chmod 600 ~/.ssh/config
 
+# Install openssh-client if ssh is not available
+if ! command -v ssh &>/dev/null; then
+    apt-get update -qq && apt-get install -y -qq openssh-client
+fi
+
 echo "SSH setup complete"
 
 # Start worker in background
