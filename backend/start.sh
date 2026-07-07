@@ -1,10 +1,30 @@
 #!/bin/bash
-# Start backend server
+# Set up SSH keys from environment variables then start the hosted API
 
-echo "Starting Effector Discovery Pipeline Backend..."
-echo "API will be available at http://localhost:8000"
-echo "API documentation at http://localhost:8000/docs"
-echo ""
+if [ -n "$HPC_SSH_KEY_B64" ]; then
+    mkdir -p ~/.ssh
+    echo "$HPC_SSH_KEY_B64" | base64 -d > ~/.ssh/medicinebow
+    chmod 600 ~/.ssh/medicinebow
+fi
 
-python main.py
+if [ -n "$HPC_SSH_CERT_B64" ]; then
+    echo "$HPC_SSH_CERT_B64" | base64 -d > ~/.ssh/medicinebow-cert.pub
+    chmod 644 ~/.ssh/medicinebow-cert.pub
+fi
 
+cat > ~/.ssh/config << 'EOF'
+Host medicinebow
+    HostName medicinebow.arcc.uwyo.edu
+    User gokulsrinathseetharam
+    IdentityFile ~/.ssh/medicinebow
+    CertificateFile ~/.ssh/medicinebow-cert.pub
+    IdentitiesOnly yes
+    PubkeyAuthentication yes
+    PreferredAuthentications publickey
+    StrictHostKeyChecking no
+EOF
+chmod 600 ~/.ssh/config
+
+echo "SSH setup complete"
+
+exec python -m uvicorn hosted_api.main:app --host 0.0.0.0 --port ${PORT:-8080}
