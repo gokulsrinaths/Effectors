@@ -1,5 +1,5 @@
 'use client'
-
+// v2
 import { useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import styles from './page.module.css'
@@ -109,7 +109,6 @@ export default function HostedPage() {
   const [runAlphafold, setRunAlphafold] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [structureImgUrl, setStructureImgUrl] = useState<string | null>(null)
-  const [queryPdbUrl, setQueryPdbUrl]   = useState<string | null>(null)
   const [rawOpen, setRawOpen]         = useState(false)
   const [elapsedSecs, setElapsedSecs] = useState(0)
   const [lastPayload, setLastPayload] = useState<Record<string, unknown> | null>(null)
@@ -163,14 +162,7 @@ export default function HostedPage() {
             headers: { 'x-job-token': accessToken },
             responseType: 'blob',
           }).then(imgR => setStructureImgUrl(URL.createObjectURL(imgR.data))).catch(() => {})
-          if (rr.data?.alphafold?.pdb_local_path) {
-            axios.get(`${API_BASE_URL}/jobs/files/${r.data.id}/alphafold`, {
-              headers: { 'x-job-token': accessToken },
-              responseType: 'blob',
-            }).then(pdbR => setQueryPdbUrl(URL.createObjectURL(pdbR.data))).catch(() => {})
-          } else if (uploadFile && uploadType === 'structure') {
-            setQueryPdbUrl(URL.createObjectURL(uploadFile))
-          }
+
         } else if (r.data.status === 'failed') {
           setMessage(`Job failed: ${r.data.error_message || 'Unknown error'}`)
         } else {
@@ -190,7 +182,7 @@ export default function HostedPage() {
     if (!sequence.trim()) { setMessage('Sequence input is required.'); return }
     const payload = { input_type: 'sequence', sequence: sequence.trim(), sequence_id: sequenceId || undefined, run_alphafold: runAlphafold }
     setLastPayload(payload)
-    setSubmitting(true); setResult(null); setStructureImgUrl(null); setQueryPdbUrl(null); setElapsedSecs(0)
+    setSubmitting(true); setResult(null); setStructureImgUrl(null); setElapsedSecs(0)
     try {
       const r = await axios.post<HostedJob>(`${API_BASE_URL}/jobs`, payload)
       setJob(r.data)
@@ -205,7 +197,7 @@ export default function HostedPage() {
 
   const handleUploadSubmit = async () => {
     if (!uploadFile) { setMessage('Choose a file before submitting.'); return }
-    setSubmitting(true); setResult(null); setStructureImgUrl(null); setQueryPdbUrl(null); setElapsedSecs(0)
+    setSubmitting(true); setResult(null); setStructureImgUrl(null); setElapsedSecs(0)
     const form = new FormData()
     form.append('input_type', uploadType)
     form.append('file', uploadFile)
