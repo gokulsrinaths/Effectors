@@ -73,7 +73,7 @@ def _parse_origins(raw_value: str) -> tuple[str, ...]:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     root = Path(__file__).resolve().parents[2]
-    data_root = root / "backend" / "hosted_api" / "data"
+    data_root = Path(os.getenv("EFFECTOR_DATA_ROOT", str(root / "backend" / "hosted_api" / "data")))
     uploads_dir = data_root / "uploads"
     results_dir = data_root / "results"
     logs_dir = data_root / "logs"

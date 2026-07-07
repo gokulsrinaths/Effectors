@@ -32,6 +32,10 @@ fi
 
 echo "SSH setup complete"
 
+# Pre-create data directories
+DATA_ROOT=${EFFECTOR_DATA_ROOT:-/app/data}
+mkdir -p "$DATA_ROOT/results" "$DATA_ROOT/uploads" "$DATA_ROOT/logs"
+
 # Start worker in background
 python -m hosted_api.worker &
 
