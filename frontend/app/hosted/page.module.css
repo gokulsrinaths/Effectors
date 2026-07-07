@@ -603,6 +603,36 @@
   display: block;
 }
 
+/* ── 3D viewer panel ─────────────────────────────────────────────────────── */
+
+.vizPanel {
+  position: relative;
+  padding: 16px 20px;
+  border-top: 1px solid rgba(99, 210, 255, 0.08);
+  overflow: hidden;
+}
+
+.vizHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.vizTitle {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #7a9abf;
+}
+
+.vizCaption {
+  font-size: 0.78rem;
+  color: #4a6080;
+  margin: 0 0 12px;
+}
+
 /* ── Raw JSON collapsible ────────────────────────────────────────────────── */
 
 .rawSection {
