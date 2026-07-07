@@ -58,22 +58,23 @@ def _make_upload_file(path: Path, filename: str) -> UploadFile:
     return UploadFile(file=temp, filename=filename)
 
 
-def _run_sequence_job(engine, request: JobCreateRequest) -> tuple[dict[str, Any], dict[str, Any] | None]:
+def _run_sequence_job(engine, request: JobCreateRequest, work_dir: Path | None = None) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """fc5 sequence path: AlphaFold → highest pLDDT PDB → TM-align all DB structures.
 
     Returns (processing_result_dict, alphafold_result_dict_or_None).
     Falls back to BLAST if AlphaFold binary is unavailable.
     """
     import uuid
+    import tempfile
     from datetime import datetime
     from .alphafold_runner import run_alphafold_prediction, _pick_predicted_pdb
 
     sequence_id = request.sequence_id or f"seq_{uuid.uuid4().hex[:8]}"
     sequence = request.sequence or ""
 
-    # Step 1 — AlphaFold prediction
-    import tempfile
-    af_output_dir = Path(tempfile.mkdtemp()) / sequence_id
+    # Step 1 — AlphaFold prediction — use work_dir so PDB stays in a stable location
+    base_dir = work_dir if work_dir is not None else Path(tempfile.mkdtemp())
+    af_output_dir = base_dir / "alphafold" / sequence_id
     af_result = run_alphafold_prediction(
         sequence_id=sequence_id,
         sequence=sequence,
@@ -212,7 +213,7 @@ def run_real_pipeline(request_payload: dict[str, Any], result_path: Path) -> dic
 
     alphafold_result: dict[str, Any] | None = None
     if request.input_type == "sequence":
-        processing_result, alphafold_result = _run_sequence_job(engine, request)
+        processing_result, alphafold_result = _run_sequence_job(engine, request, result_path.parent)
     else:
         processing_result = _run_structure_or_fasta_job(engine, request_payload)
 
@@ -247,6 +248,9 @@ def run_real_pipeline(request_payload: dict[str, Any], result_path: Path) -> dic
         # Validate alphafold result has expected shape before persisting
         if not isinstance(alphafold_result, dict) or alphafold_result.get("status") not in ("completed", "failed"):
             alphafold_result = {"status": "failed", "error_message": "Unexpected AlphaFold output format", "requested": True}
+        # pdb_remote_path = same as pdb_local_path when running on HPC (remote_runner.py context)
+        if alphafold_result.get("status") == "completed" and alphafold_result.get("pdb_local_path"):
+            alphafold_result.setdefault("pdb_remote_path", alphafold_result["pdb_local_path"])
         result["alphafold"] = alphafold_result
     if structure_image_path is not None:
         result["structure_image_path"] = structure_image_path
