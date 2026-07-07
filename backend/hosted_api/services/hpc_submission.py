@@ -88,7 +88,7 @@ def _copy_remote_file(remote_path: str, local_path: Path) -> None:
     scp_args = shlex.split(settings.hpc_scp_args) if settings.hpc_scp_args else []
     local_path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        [settings.hpc_scp_bin, *scp_args, f"{settings.hpc_remote_host_alias}:{remote_path}", str(local_path)],
+        [settings.hpc_scp_bin, *scp_args, f"{settings.hpc_remote_host_alias}:{remote_path}", str(local_path).replace("\\", "/")],
         check=True,
         text=True,
         capture_output=True,
