@@ -3,9 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import styles from './page.module.css'
-import dynamic from 'next/dynamic'
-
-const StructureViewer = dynamic(() => import('./StructureViewer'), { ssr: false })
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'
 
@@ -603,24 +600,6 @@ export default function HostedPage() {
               </div>
             )}
 
-            {/* 3D superimposed structure viewer */}
-            {queryPdbUrl && bestMatch && job && (
-              <div className={styles.viewerPanel} id="structure-viewer">
-                <div className={styles.vizHeader}>
-                  <div className={styles.panelHeaderDot} />
-                  <span className={styles.vizTitle}>Superimposed Structure View</span>
-                </div>
-                <p className={styles.vizCaption}>
-                  Query (blue) superimposed with best DB match (orange) — interactive 3D viewer
-                </p>
-                <StructureViewer
-                  queryPdbUrl={queryPdbUrl}
-                  matchPdbUrl={`${API_BASE_URL}/jobs/files/${job.id}/pdb/${bestMatch}`}
-                  matchId={bestMatch}
-                  accessToken={accessToken}
-                />
-              </div>
-            )}
 
             {/* Action buttons */}
             <div className={styles.rawSection}>
