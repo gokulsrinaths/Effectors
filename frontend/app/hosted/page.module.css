@@ -31,6 +31,7 @@
 /* ── Top nav bar ─────────────────────────────────────────────────────────── */
 
 .nav {
+  isolation: isolate;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -464,6 +465,7 @@
 /* ── Results panel ───────────────────────────────────────────────────────── */
 
 .resultsPanel {
+  position: relative;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(99, 210, 255, 0.12);
   border-left: 3px solid #00c864;

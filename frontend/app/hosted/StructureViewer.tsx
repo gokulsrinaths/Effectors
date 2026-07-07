@@ -93,6 +93,7 @@ export default function StructureViewer({ queryPdbUrl, matchPdbUrl, matchId, acc
           overflow: 'hidden',
           contain: 'strict',
           zIndex: 0,
+          transform: 'translateZ(0)',
         }}
       />
     </div>
