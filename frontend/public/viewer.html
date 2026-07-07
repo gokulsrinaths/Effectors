@@ -2,88 +2,46 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Structure Viewer</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; background: #0d1526; overflow: hidden; }
-  #viewer { width: 100%; height: 100%; position: relative; }
-  #error {
-    display: none;
+  #viewer { width: 100%; height: 100%; }
+  #msg {
     position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    color: #ff6666;
-    font-family: system-ui, sans-serif;
-    font-size: 13px;
-    text-align: center;
-    padding: 16px;
-  }
-  #loading {
-    position: absolute;
-    top: 50%;
-    left: 50%;
+    top: 50%; left: 50%;
     transform: translate(-50%, -50%);
     color: #7a9abf;
     font-family: system-ui, sans-serif;
     font-size: 13px;
+    text-align: center;
   }
 </style>
 </head>
 <body>
 <div id="viewer"></div>
-<div id="loading">Loading structures…</div>
-<div id="error"></div>
-
+<div id="msg">Waiting for structures…</div>
 <script src="https://3Dmol.org/build/3Dmol-min.js"></script>
 <script>
-(async function () {
-  const params = new URLSearchParams(window.location.search);
-  const queryUrl = params.get('queryUrl');
-  const matchUrl = params.get('matchUrl');
-  const token    = params.get('token') || '';
+window.addEventListener('message', function(e) {
+  var data = e.data;
+  if (!data || !data.queryPdb || !data.matchPdb) return;
 
-  function showError(msg) {
-    document.getElementById('loading').style.display = 'none';
-    const el = document.getElementById('error');
-    el.textContent = msg;
-    el.style.display = 'block';
-  }
+  document.getElementById('msg').style.display = 'none';
 
-  if (!queryUrl || !matchUrl) {
-    showError('Missing PDB URLs.');
-    return;
-  }
+  var viewer = $3Dmol.createViewer(document.getElementById('viewer'), {
+    backgroundColor: '#0d1526',
+  });
 
-  async function fetchPdb(url) {
-    const headers = token ? { 'x-job-token': token } : {};
-    const r = await fetch(url, { headers });
-    if (!r.ok) throw new Error('HTTP ' + r.status + ' fetching ' + url);
-    return r.text();
-  }
+  viewer.addModel(data.queryPdb, 'pdb');
+  viewer.setStyle({ model: 0 }, { cartoon: { color: '#00d4ff' } });
 
-  try {
-    const [queryPdb, matchPdb] = await Promise.all([fetchPdb(queryUrl), fetchPdb(matchUrl)]);
+  viewer.addModel(data.matchPdb, 'pdb');
+  viewer.setStyle({ model: 1 }, { cartoon: { color: '#f0a000' } });
 
-    document.getElementById('loading').style.display = 'none';
-
-    const viewer = $3Dmol.createViewer(document.getElementById('viewer'), {
-      backgroundColor: '#0d1526',
-    });
-
-    viewer.addModel(queryPdb, 'pdb');
-    viewer.setStyle({ model: 0 }, { cartoon: { color: '#00d4ff' } });
-
-    viewer.addModel(matchPdb, 'pdb');
-    viewer.setStyle({ model: 1 }, { cartoon: { color: '#f0a000' } });
-
-    viewer.zoomTo();
-    viewer.render();
-  } catch (e) {
-    showError('3D viewer error: ' + (e.message || e));
-  }
-})();
+  viewer.zoomTo();
+  viewer.render();
+});
 </script>
 </body>
 </html>
