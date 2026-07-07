@@ -27,4 +27,7 @@ chmod 600 ~/.ssh/config
 
 echo "SSH setup complete"
 
+# Start worker in background
+python -m hosted_api.worker &
+
 exec python -m uvicorn hosted_api.main:app --host 0.0.0.0 --port ${PORT:-8080}
