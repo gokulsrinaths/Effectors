@@ -81,9 +81,10 @@ def _run_sequence_job(engine, request: JobCreateRequest) -> tuple[dict[str, Any]
     )
 
     if af_result.get("status") == "completed":
-        # Step 2 — Pick highest pLDDT model (rank_001 = first alphabetically)
-        best_pdb = _pick_predicted_pdb(af_output_dir)
-        if best_pdb:
+        # Step 2 — Use the PDB path that run_alphafold_prediction already verified
+        pdb_path_str = af_result.get("pdb_local_path")
+        best_pdb = Path(pdb_path_str) if pdb_path_str else _pick_predicted_pdb(af_output_dir)
+        if best_pdb and best_pdb.exists():
             # Step 3 — TM-align predicted structure against all DB structures
             upload_file = _make_upload_file(best_pdb, f"{sequence_id}.pdb")
 
