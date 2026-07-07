@@ -11,7 +11,6 @@ type JobStatus = 'queued' | 'reserved' | 'submitted' | 'running' | 'completed' |
 interface HostedJob {
   id: string
   input_type: string
-  email?: string | null
   status: string
   created_at: string
   started_at?: string | null
@@ -97,7 +96,6 @@ function fmtEval(v?: number): string {
 export default function HostedPage() {
   const [mounted, setMounted]         = useState(false)
   const [activeTab, setActiveTab]     = useState<'sequence' | 'upload'>('sequence')
-  const [email, setEmail]             = useState('')
   const [sequenceId, setSequenceId]   = useState('')
   const [sequence, setSequence]       = useState('')
   const [uploadType, setUploadType]   = useState<'structure' | 'fasta'>('structure')
@@ -190,7 +188,7 @@ export default function HostedPage() {
 
   const handleSequenceSubmit = async () => {
     if (!sequence.trim()) { setMessage('Sequence input is required.'); return }
-    const payload = { input_type: 'sequence', email: email || undefined, sequence: sequence.trim(), sequence_id: sequenceId || undefined, run_alphafold: runAlphafold }
+    const payload = { input_type: 'sequence', sequence: sequence.trim(), sequence_id: sequenceId || undefined, run_alphafold: runAlphafold }
     setLastPayload(payload)
     setSubmitting(true); setResult(null); setStructureImgUrl(null); setQueryPdbUrl(null); setElapsedSecs(0)
     try {
@@ -210,7 +208,6 @@ export default function HostedPage() {
     setSubmitting(true); setResult(null); setStructureImgUrl(null); setQueryPdbUrl(null); setElapsedSecs(0)
     const form = new FormData()
     form.append('input_type', uploadType)
-    if (email) form.append('email', email)
     form.append('file', uploadFile)
     try {
       const r = await axios.post<HostedJob>(`${API_BASE_URL}/jobs/upload`, form, {
@@ -333,12 +330,6 @@ export default function HostedPage() {
             <span className={styles.panelTitle}>Submit Job</span>
           </div>
           <div className={styles.panelBody}>
-
-            {/* Shared email */}
-            <div className={styles.field}>
-              <label className={styles.label}>Email (optional)</label>
-              <input className={styles.input} value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com" />
-            </div>
 
             {/* Tabs */}
             <div className={styles.tabs}>
