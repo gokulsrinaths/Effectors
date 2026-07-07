@@ -97,7 +97,6 @@ function statusToStepIndex(status: string): number {
 export default function Home() {
   const [mounted, setMounted] = useState(false)
   const [activeTab, setActiveTab] = useState<'structure' | 'sequence' | 'fasta'>('sequence')
-  const [email, setEmail] = useState('')
   const [sequenceInput, setSequenceInput] = useState('')
   const [sequenceId, setSequenceId] = useState('')
   const [runAlphafold, setRunAlphafold] = useState(false)
@@ -224,7 +223,6 @@ export default function Home() {
         input_type: 'sequence',
         sequence: sequenceInput.trim(),
         sequence_id: sequenceId.trim() || undefined,
-        email: email.trim() || undefined,
         run_alphafold: runAlphafold,
       })
       setJobInfo({ id: job.id, token: job.access_token || '' })
@@ -248,8 +246,6 @@ export default function Home() {
     const form = new FormData()
     form.append('input_type', inputType)
     form.append('file', file)
-    if (email.trim()) form.append('email', email.trim())
-
     try {
       const { data: job } = await axios.post<JobResponse>(`${HOSTED_API}/jobs/upload`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
@@ -322,21 +318,6 @@ export default function Home() {
         <section className={styles.inputPanel}>
           <h2>Submit Input</h2>
 
-          {/* Email (optional, applies to all job types) */}
-          <div style={{ marginBottom: 20 }}>
-            <label className={styles.label}>
-              Email (optional — receive a notification when the job completes):
-              <input
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                className={styles.textInput}
-                disabled={processing}
-                style={{ marginTop: 6 }}
-              />
-            </label>
-          </div>
 
           {/* Tabs */}
           <div className={styles.tabs}>
