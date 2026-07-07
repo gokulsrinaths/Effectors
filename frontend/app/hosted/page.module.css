@@ -655,10 +655,6 @@
 /* ── Print / PDF styles ───────────────────────────────────────────────────── */
 
 @media print {
-  :global(body) {
-    background: white !important;
-    color: black !important;
-  }
   .nav,
   .hero,
   .inputPanel,
