@@ -292,28 +292,7 @@ def refresh_hpc_job(job: HostedJob, local_result_path: Path) -> tuple[HostedJob,
                 payload["structure_image_local_path"] = str(local_image_path)
             except Exception:
                 pass  # rendering may have been skipped on HPC — not fatal
-        # Cache top-10 DB PDB files from HPC so Railway can serve them for download
-        try:
-            remote_db_root = settings.hpc_remote_effectors_root.rstrip("/") + "/Database"
-            local_db_cache = local_result_path.parent / "db_pdbs"
-            cached_pdbs: dict[str, str] = {}
-            for res in (payload.get("processing_result") or {}).get("results") or []:
-                for match in (res.get("tm_align_result") or {}).get("top_matches") or []:
-                    sid = match.get("structure")
-                    if not sid or sid in cached_pdbs:
-                        continue
-                    remote_pdb = f"{remote_db_root}/{sid}.pdb"
-                    local_pdb = local_db_cache / f"{sid}.pdb"
-                    try:
-                        _copy_remote_file(remote_pdb, local_pdb)
-                        cached_pdbs[sid] = str(local_pdb)
-                    except Exception:
-                        pass
-            if cached_pdbs:
-                payload["cached_db_pdbs"] = cached_pdbs
-        except Exception:
-            pass  # not fatal — download buttons will 404 gracefully
-        if alphafold or remote_image_path or payload.get("cached_db_pdbs"):
+        if alphafold or remote_image_path:
             local_result_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         job.status = "completed"
         job.result_path = str(local_result_path)

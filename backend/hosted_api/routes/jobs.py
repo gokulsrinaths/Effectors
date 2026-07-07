@@ -248,17 +248,20 @@ def get_db_structure(
     x_api_key: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    job = _get_job_with_access(db, job_id, x_job_token, x_api_key)
-    # Use cached copy that the worker SCPed from HPC on job completion
-    if job.result_path:
-        result_payload = json.loads(Path(job.result_path).read_text(encoding="utf-8"))
-        cached = result_payload.get("cached_db_pdbs") or {}
-        cached_path = cached.get(structure_id)
-        if cached_path:
-            pdb_path = Path(cached_path)
-            if pdb_path.exists():
-                return FileResponse(path=str(pdb_path), media_type="chemical/x-pdb", filename=f"{structure_id}.pdb")
-    raise HTTPException(status_code=404, detail=f"Structure not available: {structure_id}")
+    _get_job_with_access(db, job_id, x_job_token, x_api_key)
+    from ..services.pipeline_adapter import _load_engine_module
+    engine = _load_engine_module()
+    pdb_path_str = engine._get_pdb_path_from_structure_name(structure_id)
+    if not pdb_path_str:
+        raise HTTPException(status_code=404, detail=f"Structure not found: {structure_id}")
+    pdb_path = Path(pdb_path_str)
+    if not pdb_path.exists():
+        raise HTTPException(status_code=404, detail=f"Structure file missing: {structure_id}")
+    return FileResponse(
+        path=str(pdb_path),
+        media_type="chemical/x-pdb",
+        filename=f"{structure_id}.pdb",
+    )
 
 
 @router.get("/files/{job_id}/alphafold")
