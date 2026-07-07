@@ -47,7 +47,7 @@ def init_db() -> None:
             db_path = (Path.cwd() / db_path).resolve()
         db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=engine, checkfirst=True)
     _run_additive_migrations()
 
 
