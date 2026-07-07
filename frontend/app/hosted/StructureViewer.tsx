@@ -84,7 +84,7 @@ export default function StructureViewer({ queryPdbUrl, matchPdbUrl, matchId, acc
       </div>
       <div
         ref={containerRef}
-        style={{ width: '100%', height: 380, borderRadius: 8, border: '1px solid rgba(99,210,255,0.12)', overflow: 'hidden' }}
+        style={{ position: 'relative', width: '100%', height: 380, borderRadius: 8, border: '1px solid rgba(99,210,255,0.12)', overflow: 'hidden' }}
       />
     </div>
   )
