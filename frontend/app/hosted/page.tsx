@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import styles from './page.module.css'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://effectors-production.up.railway.app'
 
 type JobStatus = 'queued' | 'reserved' | 'submitted' | 'running' | 'completed' | 'failed'
 

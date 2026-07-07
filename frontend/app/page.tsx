@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import axios from 'axios'
 import styles from './page.module.css'
 
-const HOSTED_API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'
+const HOSTED_API = process.env.NEXT_PUBLIC_API_URL || 'https://effectors-production.up.railway.app'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
