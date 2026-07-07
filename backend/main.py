@@ -1379,9 +1379,10 @@ def _classify_structure_result(match_result: StructureMatchResult, query_id: str
             "target_id": match_result.matched_structure or "N/A",
             "tm_score": match_result.tm_score,
             "rmsd": match_result.rmsd or 0.0,
-            "alignment_length": match_result.alignment_length or 0
+            "alignment_length": match_result.alignment_length or 0,
+            "top_matches": match_result.top_matches or [],
         }
-    
+
     return ClassificationResult(
         query_id=query_id,
         classification=classification,

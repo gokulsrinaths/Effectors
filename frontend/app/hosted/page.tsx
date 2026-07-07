@@ -3,6 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import styles from './page.module.css'
+import dynamic from 'next/dynamic'
+
+const StructureViewer = dynamic(() => import('./StructureViewer'), { ssr: false })
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'
 
@@ -26,12 +29,19 @@ interface HostedJob {
   remote_job_id?: string | null
 }
 
+interface TmMatch {
+  structure: string
+  tm_score: number
+  rmsd: number
+  aligned_length: number
+}
+
 interface HostedResult {
   processing_result?: {
     results?: Array<{
       query_id?: string
       blast_result?: { e_value?: number; identity?: number; hit_id?: string }
-      tm_align_result?: { tm_score?: number; rmsd?: number }
+      tm_align_result?: { tm_score?: number; rmsd?: number; top_matches?: TmMatch[] }
       classification?: string
       best_match_id?: string
     }>
@@ -104,6 +114,7 @@ export default function HostedPage() {
   const [runAlphafold, setRunAlphafold] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [structureImgUrl, setStructureImgUrl] = useState<string | null>(null)
+  const [queryPdbUrl, setQueryPdbUrl]   = useState<string | null>(null)
   const [rawOpen, setRawOpen]         = useState(false)
   const [elapsedSecs, setElapsedSecs] = useState(0)
   const [lastPayload, setLastPayload] = useState<Record<string, unknown> | null>(null)
@@ -157,6 +168,14 @@ export default function HostedPage() {
             headers: { 'x-job-token': accessToken },
             responseType: 'blob',
           }).then(imgR => setStructureImgUrl(URL.createObjectURL(imgR.data))).catch(() => {})
+          if (rr.data?.alphafold?.pdb_local_path) {
+            axios.get(`${API_BASE_URL}/jobs/files/${r.data.id}/alphafold`, {
+              headers: { 'x-job-token': accessToken },
+              responseType: 'blob',
+            }).then(pdbR => setQueryPdbUrl(URL.createObjectURL(pdbR.data))).catch(() => {})
+          } else if (uploadFile && uploadType === 'structure') {
+            setQueryPdbUrl(URL.createObjectURL(uploadFile))
+          }
         } else if (r.data.status === 'failed') {
           setMessage(`Job failed: ${r.data.error_message || 'Unknown error'}`)
         } else {
@@ -176,7 +195,7 @@ export default function HostedPage() {
     if (!sequence.trim()) { setMessage('Sequence input is required.'); return }
     const payload = { input_type: 'sequence', email: email || undefined, sequence: sequence.trim(), sequence_id: sequenceId || undefined, run_alphafold: runAlphafold }
     setLastPayload(payload)
-    setSubmitting(true); setResult(null); setStructureImgUrl(null); setElapsedSecs(0)
+    setSubmitting(true); setResult(null); setStructureImgUrl(null); setQueryPdbUrl(null); setElapsedSecs(0)
     try {
       const r = await axios.post<HostedJob>(`${API_BASE_URL}/jobs`, payload)
       setJob(r.data)
@@ -191,7 +210,7 @@ export default function HostedPage() {
 
   const handleUploadSubmit = async () => {
     if (!uploadFile) { setMessage('Choose a file before submitting.'); return }
-    setSubmitting(true); setResult(null); setStructureImgUrl(null); setElapsedSecs(0)
+    setSubmitting(true); setResult(null); setStructureImgUrl(null); setQueryPdbUrl(null); setElapsedSecs(0)
     const form = new FormData()
     form.append('input_type', uploadType)
     if (email) form.append('email', email)
@@ -246,14 +265,34 @@ export default function HostedPage() {
     }
   }
 
+  const downloadDbPdb = async (structureId: string) => {
+    if (!job || !accessToken) return
+    try {
+      const r = await axios.get(`${API_BASE_URL}/jobs/files/${job.id}/pdb/${structureId}`, {
+        headers: { 'x-job-token': accessToken },
+        responseType: 'blob',
+      })
+      const url = window.URL.createObjectURL(r.data)
+      const a = document.createElement('a')
+      a.href = url; a.download = `${structureId}.pdb`
+      document.body.appendChild(a); a.click(); a.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (err: any) {
+      setMessage(err?.response?.data?.detail || err?.message || 'Download failed.')
+    }
+  }
+
+  const handlePrintPdf = () => window.print()
+
   // Derived metrics from result
-  const firstResult = result?.processing_result?.results?.[0]
-  const tmScore     = firstResult?.tm_align_result?.tm_score ?? (result?.summary?.tm_score as number | undefined)
-  const eValue      = firstResult?.blast_result?.e_value
-  const identity    = firstResult?.blast_result?.identity
-  const bestMatch   = firstResult?.best_match_id ?? (result?.summary?.best_match_id as string | undefined)
+  const firstResult  = result?.processing_result?.results?.[0]
+  const tmScore      = firstResult?.tm_align_result?.tm_score ?? (result?.summary?.tm_score as number | undefined)
+  const eValue       = firstResult?.blast_result?.e_value
+  const identity     = firstResult?.blast_result?.identity
+  const bestMatch    = firstResult?.best_match_id ?? (result?.summary?.best_match_id as string | undefined)
   const classification = firstResult?.classification ?? (result?.summary?.classification as string | undefined)
-  const alphaStatus = result?.alphafold?.status
+  const alphaStatus  = result?.alphafold?.status
+  const topMatches   = firstResult?.tm_align_result?.top_matches ?? []
 
   if (!mounted) return <div style={{ minHeight: '100vh', background: '#0a0e1a' }} />
 
@@ -456,6 +495,10 @@ export default function HostedPage() {
                 <span className={styles.metricLabel}>Best Match</span>
                 <span className={styles.metricValue} style={{ fontSize: '0.78rem', color: '#b8d4e8', wordBreak: 'break-all' }}>{bestMatch ?? '—'}</span>
               </div>
+              <div className={styles.metric} style={{ flexBasis: '100%' }}>
+                <span className={styles.metricLabel}>RMSD</span>
+                <span className={styles.metricValue} style={{ color: '#b8d4e8' }}>{firstResult?.tm_align_result?.rmsd != null ? firstResult.tm_align_result.rmsd.toFixed(2) + ' Å' : '—'}</span>
+              </div>
               {alphaStatus && (
                 <div className={styles.metric}>
                   <span className={styles.metricLabel}>AlphaFold</span>
@@ -465,6 +508,47 @@ export default function HostedPage() {
                 </div>
               )}
             </div>
+
+            {/* Top-10 TM-align matches table */}
+            {topMatches.length > 0 && (
+              <div className={styles.batchTable} id="tm-matches-table">
+                <div className={styles.batchHeader}>
+                  <span className={styles.panelTitle}>Top TM-align Matches</span>
+                </div>
+                <table className={styles.table}>
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Structure ID</th>
+                      <th>TM-Score</th>
+                      <th>RMSD (Å)</th>
+                      <th>Aligned Length</th>
+                      <th>Download</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {topMatches.map((m, i) => (
+                      <tr key={i}>
+                        <td style={{ color: '#8899aa', fontSize: '0.8rem' }}>{i + 1}</td>
+                        <td style={{ fontFamily: 'monospace', fontSize: '0.8rem', color: '#b8d4e8' }}>{m.structure}</td>
+                        <td style={{ color: m.tm_score >= 0.5 ? '#00c864' : m.tm_score >= 0.3 ? '#f0a000' : '#ff4444' }}>{m.tm_score.toFixed(3)}</td>
+                        <td style={{ color: '#b8d4e8' }}>{m.rmsd.toFixed(2)}</td>
+                        <td style={{ color: '#8899aa' }}>{m.aligned_length}</td>
+                        <td>
+                          <button
+                            className={styles.secondaryBtn}
+                            style={{ padding: '3px 10px', fontSize: '0.75rem' }}
+                            onClick={() => downloadDbPdb(m.structure)}
+                          >
+                            ↓ PDB
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {/* FASTA batch: all results table */}
             {(result?.processing_result?.results?.length ?? 0) > 1 && (
@@ -519,6 +603,25 @@ export default function HostedPage() {
               </div>
             )}
 
+            {/* 3D superimposed structure viewer */}
+            {queryPdbUrl && bestMatch && job && (
+              <div className={styles.vizPanel} id="structure-viewer">
+                <div className={styles.vizHeader}>
+                  <div className={styles.panelHeaderDot} />
+                  <span className={styles.vizTitle}>Superimposed Structure View</span>
+                </div>
+                <p className={styles.vizCaption}>
+                  Query (blue) superimposed with best DB match (orange) — interactive 3D viewer
+                </p>
+                <StructureViewer
+                  queryPdbUrl={queryPdbUrl}
+                  matchPdbUrl={`${API_BASE_URL}/jobs/files/${job.id}/pdb/${bestMatch}`}
+                  matchId={bestMatch}
+                  accessToken={accessToken}
+                />
+              </div>
+            )}
+
             {/* Action buttons */}
             <div className={styles.rawSection}>
               <div className={styles.btnRow} style={{ marginBottom: 16 }}>
@@ -527,6 +630,9 @@ export default function HostedPage() {
                     {downloading ? 'Downloading…' : '↓ Download AlphaFold PDB'}
                   </button>
                 )}
+                <button className={styles.secondaryBtn} onClick={handlePrintPdf}>
+                  ↓ Download PDF Report
+                </button>
               </div>
 
               {/* Raw JSON toggle */}

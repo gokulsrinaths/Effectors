@@ -651,3 +651,52 @@
   max-height: 400px;
   line-height: 1.6;
 }
+
+/* ── Print / PDF styles ───────────────────────────────────────────────────── */
+
+@media print {
+  :global(body) {
+    background: white !important;
+    color: black !important;
+  }
+  .nav,
+  .hero,
+  .inputPanel,
+  .btnRow,
+  .rawSection,
+  .rawToggle {
+    display: none !important;
+  }
+  .container {
+    padding: 0;
+  }
+  .shell {
+    padding: 0;
+  }
+  .resultsPanel {
+    border: none;
+    box-shadow: none;
+    background: white;
+    color: black;
+  }
+  .metricLabel,
+  .metricValue,
+  .panelTitle,
+  .vizTitle {
+    color: black !important;
+  }
+  .table th,
+  .table td {
+    color: black !important;
+    border-color: #ccc !important;
+  }
+  .vizImage {
+    max-width: 100%;
+    border: 1px solid #ccc;
+  }
+  .classificationBadge {
+    border: 1px solid #ccc;
+    color: black !important;
+    background: #eee !important;
+  }
+}

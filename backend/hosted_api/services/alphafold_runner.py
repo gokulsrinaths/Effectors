@@ -91,7 +91,7 @@ def run_alphafold_prediction(*, sequence_id: str, sequence: str, output_dir: Pat
         "status": "completed",
         "tool": alphafold_bin,
         "output_dir": str(output_dir),
-        "pdb_remote_path": str(predicted),
+        "pdb_local_path": str(predicted),
         "stdout": (completed.stdout or "").strip(),
     }
 

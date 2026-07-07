@@ -240,6 +240,30 @@ def get_structure_image(
     return FileResponse(path=str(image_path), media_type="image/png", filename=image_path.name)
 
 
+@router.get("/files/{job_id}/pdb/{structure_id}")
+def get_db_structure(
+    job_id: str,
+    structure_id: str,
+    x_job_token: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    _get_job_with_access(db, job_id, x_job_token, x_api_key)
+    from ..services.pipeline_adapter import _load_engine_module
+    engine = _load_engine_module()
+    pdb_path_str = engine._get_pdb_path_from_structure_name(structure_id)
+    if not pdb_path_str:
+        raise HTTPException(status_code=404, detail=f"Structure not found: {structure_id}")
+    pdb_path = Path(pdb_path_str)
+    if not pdb_path.exists():
+        raise HTTPException(status_code=404, detail=f"Structure file missing: {structure_id}")
+    return FileResponse(
+        path=str(pdb_path),
+        media_type="chemical/x-pdb",
+        filename=f"{structure_id}.pdb",
+    )
+
+
 @router.get("/files/{job_id}/alphafold")
 def get_alphafold_structure(
     job_id: str,
