@@ -76,7 +76,7 @@ export default function StructureViewer({ queryPdbUrl, matchPdbUrl, matchId, acc
   )
 
   return (
-    <div>
+    <div style={{ position: 'relative', zIndex: 0, isolation: 'isolate' }}>
       <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 8, fontSize: '0.75rem', color: '#8899aa' }}>
         <span><span style={{ color: '#00d4ff' }}>■</span> Query structure</span>
         <span><span style={{ color: '#f0a000' }}>■</span> Best match: {matchId}</span>
@@ -84,7 +84,16 @@ export default function StructureViewer({ queryPdbUrl, matchPdbUrl, matchId, acc
       </div>
       <div
         ref={containerRef}
-        style={{ position: 'relative', width: '100%', height: 380, borderRadius: 8, border: '1px solid rgba(99,210,255,0.12)', overflow: 'hidden' }}
+        style={{
+          position: 'relative',
+          width: '100%',
+          height: 380,
+          borderRadius: 8,
+          border: '1px solid rgba(99,210,255,0.12)',
+          overflow: 'hidden',
+          contain: 'strict',
+          zIndex: 0,
+        }}
       />
     </div>
   )

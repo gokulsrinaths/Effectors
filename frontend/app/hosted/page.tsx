@@ -605,7 +605,7 @@ export default function HostedPage() {
 
             {/* 3D superimposed structure viewer */}
             {queryPdbUrl && bestMatch && job && (
-              <div className={styles.vizPanel} id="structure-viewer">
+              <div className={styles.viewerPanel} id="structure-viewer">
                 <div className={styles.vizHeader}>
                   <div className={styles.panelHeaderDot} />
                   <span className={styles.vizTitle}>Superimposed Structure View</span>
