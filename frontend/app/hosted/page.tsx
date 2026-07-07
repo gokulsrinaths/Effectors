@@ -1,5 +1,4 @@
 'use client'
-// v2
 import { useEffect, useMemo, useRef, useState } from 'react'
 import axios from 'axios'
 import styles from './page.module.css'
