@@ -239,7 +239,9 @@ def run_real_pipeline(request_payload: dict[str, Any], result_path: Path) -> dic
             pdb_path_str = engine._get_pdb_path_from_structure_name(best_match_id)
             if pdb_path_str:
                 pdb_path = Path(pdb_path_str)
-                output_png = result_path.parent / "structure_preview.png"
+                # Must be job-scoped: the API serves {job_id}.structure.png, and a
+                # shared filename lets concurrent jobs overwrite each other's render.
+                output_png = result_path.parent / f"{job_id}.structure.png"
                 settings = _get_settings()
                 if render_structure_png(pdb_path, output_png, settings.chimerax_bin):
                     structure_image_path = str(output_png)

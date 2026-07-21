@@ -7,3 +7,4 @@ python-dotenv>=1.0.0,<2
 biopython>=1.83,<2
 requests>=2.31.0,<3
 aiofiles>=23.0.0,<25
+reportlab>=4.0,<5
