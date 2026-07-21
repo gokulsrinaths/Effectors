@@ -515,27 +515,121 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: inherit;
   font-variant-numeric: tabular-nums;
 }
 
+/* Marks the larger of the two normalized scores. Deliberately no color —
+   color is reserved for the TM-score quality thresholds. */
 .scoreHigher {
-  color: #00e37a;
   font-weight: 800;
 }
 
 .higherBadge {
   display: inline-block;
   padding: 1px 5px;
-  border: 1px solid rgba(0, 227, 122, 0.35);
+  border: 1px solid rgba(184, 212, 232, 0.28);
   border-radius: 999px;
-  background: rgba(0, 227, 122, 0.12);
-  color: #00e37a;
+  background: rgba(184, 212, 232, 0.10);
+  color: #8899aa;
   font-family: inherit;
   font-size: 0.58rem;
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+/* ── Alignment type ──────────────────────────────────────────────────────── */
+
+.alignBadge {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid rgba(184, 212, 232, 0.25);
+  border-radius: 4px;
+  background: rgba(184, 212, 232, 0.08);
+  color: #b8d4e8;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.align_full_fold {
+  border-color: rgba(0, 200, 100, 0.4);
+  background: rgba(0, 200, 100, 0.12);
+  color: #00c864;
+}
+
+/* A domain match is a real, publishable hit — the query contains the target —
+   so it must read as a finding, not as a weak result. */
+.align_domain_match {
+  border-color: rgba(0, 212, 255, 0.45);
+  background: rgba(0, 212, 255, 0.12);
+  color: #00d4ff;
+}
+
+.align_ambiguous {
+  border-color: rgba(240, 160, 0, 0.4);
+  background: rgba(240, 160, 0, 0.10);
+  color: #f0a000;
+}
+
+.align_unrelated {
+  border-color: rgba(255, 68, 68, 0.35);
+  background: rgba(255, 68, 68, 0.08);
+  color: #ff4444;
+}
+
+.classDomain {
+  background: rgba(0, 212, 255, 0.14);
+  border: 1px solid rgba(0, 212, 255, 0.4);
+  color: #00d4ff;
+}
+
+/* ── Score legend ────────────────────────────────────────────────────────── */
+
+.legend {
+  margin: 0 20px 18px;
+  padding: 14px 16px;
+  border: 1px solid rgba(99, 210, 255, 0.14);
+  border-radius: 8px;
+  background: rgba(0, 212, 255, 0.04);
+  break-inside: avoid;
+}
+
+.legendLead {
+  margin: 0 0 10px;
+  color: #9fb6cc;
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+.legendLead strong { color: #d6e6f5; }
+
+.legendBands {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  color: #9fb6cc;
+  font-size: 0.75rem;
+}
+
+.legendBands strong { color: #d6e6f5; }
+
+.legendCite {
+  margin: 0;
+  color: #6b8299;
+  font-size: 0.68rem;
+  font-style: italic;
+}
+
+.batchNote {
+  margin-left: 10px;
+  color: #6b8299;
+  font-size: 0.7rem;
+  font-style: italic;
 }
 
 .classificationBadge {
@@ -726,9 +820,33 @@
   }
   .container {
     padding: 0;
+    background: white !important;
   }
   .shell {
     padding: 0;
+  }
+  /* The job monitor is useful provenance for a printed report, but it is styled
+     as a dark terminal — flatten it so it does not print as a black block. */
+  .terminal,
+  .terminalBar,
+  .terminalBody {
+    background: white !important;
+    border-color: #ccc !important;
+  }
+  .terminalTitle,
+  .termMsg,
+  .termKey,
+  .termVal {
+    color: black !important;
+  }
+  .termDot,
+  .statusDot {
+    display: none !important;
+  }
+  .statusBadge {
+    border: 1px solid #999 !important;
+    background: white !important;
+    color: black !important;
   }
   .resultsPanel {
     border: none;
@@ -755,5 +873,51 @@
     border: 1px solid #ccc;
     color: black !important;
     background: #eee !important;
+  }
+
+  /* Score quality is encoded only in color on screen, which a monochrome print
+     destroys. Force black and re-encode the band as text so the printed report
+     stays interpretable on its own. */
+  .scoreValue,
+  .metricGreen,
+  .metricYellow,
+  .metricRed,
+  .metricCyan {
+    color: black !important;
+  }
+  .scoreValue.metricGreen::after  { content: " (same fold)"; }
+  .scoreValue.metricYellow::after { content: " (ambiguous)"; }
+  .scoreValue.metricRed::after    { content: " (unrelated)"; }
+  .scoreValue.metricGreen::after,
+  .scoreValue.metricYellow::after,
+  .scoreValue.metricRed::after {
+    font-size: 0.72em;
+    font-style: italic;
+    white-space: nowrap;
+  }
+
+  .higherBadge,
+  .alignBadge {
+    border: 1px solid #999 !important;
+    background: white !important;
+    color: black !important;
+  }
+
+  /* The legend is the key to every number on the page — it must print. */
+  .legend {
+    display: block !important;
+    border: 1px solid #ccc;
+    background: white;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .legend,
+  .legendLead,
+  .legendLead strong,
+  .legendBands,
+  .legendBands strong,
+  .legendCite,
+  .batchNote {
+    color: black !important;
   }
 }

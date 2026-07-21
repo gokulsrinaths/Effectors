@@ -32,6 +32,14 @@ function pseudo(seed: number) {
   return (x >>> 0) / 0xffffffff
 }
 
+// Mirrors ALIGNMENT_TYPE_LABELS in backend/main.py.
+const ALIGNMENT_CLASSIFICATION: Record<string, string> = {
+  full_fold: 'Known structural family',
+  domain_match: 'Partial / domain match',
+  ambiguous: 'Ambiguous structural similarity',
+  unrelated: 'Novel structure',
+}
+
 function makeTm(seed: number): TmAlignResult {
   const r1 = pseudo(seed)
   const r2 = pseudo(seed ^ 0x9e3779b9)
@@ -46,11 +54,27 @@ function makeTm(seed: number): TmAlignResult {
     'XopQ_like_009',
     'Putative_effector_103',
   ]
+  const c1 = Number(tm.toFixed(3))
+  const c2 = Number(tmChain2.toFixed(3))
+  const best = Math.max(c1, c2)
+  const worst = Math.min(c1, c2)
+  const alignmentType =
+    best >= 0.5 && worst >= 0.5 ? 'full_fold'
+    : best >= 0.5 ? 'domain_match'
+    : best < 0.2 ? 'unrelated'
+    : 'ambiguous'
+  const qLen = Math.floor(aln / clamp(0.4 + r1 * 0.55, 0.4, 0.95))
+  const tLen = Math.floor(aln / clamp(0.4 + r2 * 0.55, 0.4, 0.95))
   return {
     target_id: pick(targets, seed),
-    tm_score: Number(tm.toFixed(3)),
-    tm_score_chain1: Number(tm.toFixed(3)),
-    tm_score_chain2: Number(tmChain2.toFixed(3)),
+    tm_score: c1,
+    tm_score_chain1: c1,
+    tm_score_chain2: c2,
+    tm_score_best: best,
+    alignment_type: alignmentType,
+    coverage_query: Number((aln / qLen).toFixed(4)),
+    coverage_target: Number((aln / tLen).toFixed(4)),
+    seq_id: Number((0.05 + r2 * 0.35).toFixed(3)),
     rmsd: Number(rmsd.toFixed(2)),
     alignment_length: aln,
   }
@@ -89,8 +113,7 @@ function makeVisualization(id: string) {
 export function mockStructureResult(filename: string): ProcessingResult {
   const seed = hashString(filename)
   const tm = makeTm(seed)
-  const classification =
-    tm.tm_score >= 0.5 ? 'Known structural family' : 'Novel structure'
+  const classification = ALIGNMENT_CLASSIFICATION[tm.alignment_type ?? 'unrelated']
 
   const queryId = filename.replace(/\.(pdb|cif)$/i, '')
   const bestMatchId = tm.target_id
@@ -121,9 +144,7 @@ export function mockSequenceResult(sequence: string, sequenceId?: string): Proce
   const isNovel = norm.length < 80 || blast.identity < 0.3
   const classification = isNovel
     ? 'Novel sequence - structure prediction required'
-    : tm.tm_score >= 0.5
-      ? 'Known structural family'
-      : 'Structurally similar'
+    : ALIGNMENT_CLASSIFICATION[tm.alignment_type ?? 'unrelated']
 
   const queryId = sequenceId?.trim() || `seq_${(seed % 1_000_000).toString().padStart(6, '0')}`
   const bestMatchId = isNovel ? undefined : tm.target_id
@@ -182,9 +203,7 @@ export function mockFastaResult(fastaText: string): ProcessingResult {
     const isNovel = norm.length < 80 || blast.identity < 0.3
     const classification = isNovel
       ? 'Novel sequence - structure prediction required'
-      : tm.tm_score >= 0.5
-        ? 'Known structural family'
-        : 'Structurally similar'
+      : ALIGNMENT_CLASSIFICATION[tm.alignment_type ?? 'unrelated']
     const bestMatchId = isNovel ? undefined : tm.target_id
     return {
       query_id: e.id,
