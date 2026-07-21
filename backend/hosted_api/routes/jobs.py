@@ -283,6 +283,36 @@ def get_alphafold_structure(
     )
 
 
+@router.get("/files/{job_id}/report-pdf")
+def get_report_pdf(
+    job_id: str,
+    x_job_token: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    """Serve the PDF report, generating it on demand if it is not on disk yet.
+
+    Lazy generation means the download works for jobs that completed before this
+    existed, and for any job whose artifacts were lost to a container restart.
+    """
+    from ..services.report_pdf import build_job_report_pdf
+
+    job = _get_job_with_access(db, job_id, x_job_token, x_api_key)
+    settings = get_settings()
+    report_path = settings.results_dir / f"{job.id}.report.pdf"
+
+    if not report_path.exists() and job.result_path:
+        build_job_report_pdf(job.id)
+
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail=f"No PDF report available for job: {job_id}")
+    return FileResponse(
+        path=str(report_path),
+        media_type="application/pdf",
+        filename=f"effector-report-{job.id}.pdf",
+    )
+
+
 @router.get("/{job_id}", response_model=JobResponse)
 def get_job(
     job_id: str,

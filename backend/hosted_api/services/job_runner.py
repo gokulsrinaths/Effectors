@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 import json
+import logging
 from pathlib import Path
 from threading import Event, Thread
 
@@ -17,6 +18,9 @@ from .emailer import send_or_preview_email
 from .execution import resolve_execution_mode
 from .hpc_submission import refresh_hpc_job, submit_hpc_job
 from .pipeline_adapter import run_real_pipeline
+from .report_pdf import build_job_report_pdf
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -63,21 +67,52 @@ def _mark_retry_or_failure(db: Session, job: HostedJob, exc: Exception) -> Hoste
     return job
 
 
-def _send_completion_email(job: HostedJob, summary_message: str) -> None:
-    settings = get_settings()
-    if not job.email:
-        return
-    send_or_preview_email(
-        email=job.email,
-        subject=f"Effector job {job.id} completed",
-        body=(
+def _send_completion_email(
+    job: HostedJob, summary_message: str, result: dict | None = None
+) -> None:
+    """Mail the completion notice with the PDF report attached.
+
+    Total by construction: the job is already committed as completed by the time
+    this runs, and both call sites sit inside a broad ``except Exception`` that
+    would otherwise re-queue a finished job over an SMTP timeout. Nothing in here
+    may propagate.
+    """
+    try:
+        settings = get_settings()
+        if not job.email:
+            return
+
+        # Guarded separately from the send: a report problem should downgrade the
+        # email to text-only, never suppress the notification entirely.
+        try:
+            pdf_path = build_job_report_pdf(job.id, result)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "PDF report unavailable for job %s: %s: %s", job.id, type(exc).__name__, exc
+            )
+            pdf_path = None
+
+        body = (
             "Your job finished.\n\n"
             f"Job ID: {job.id}\n"
             f"Status: {job.status}\n"
             f"Summary: {summary_message}\n"
-        ),
-        preview_dir=settings.logs_dir / "email-previews",
-    )
+        )
+        if pdf_path:
+            body += "\nA PDF report of your results is attached.\n"
+
+        send_or_preview_email(
+            email=job.email,
+            subject=f"Effector job {job.id} completed",
+            body=body,
+            preview_dir=settings.logs_dir / "email-previews",
+            attachments=[pdf_path] if pdf_path else None,
+            preview_slug=job.id,
+        )
+    except Exception as exc:  # noqa: BLE001 — see docstring
+        logger.warning(
+            "Completion email failed for job %s: %s: %s", job.id, type(exc).__name__, exc
+        )
 
 
 def run_job(db: Session, job: HostedJob, request: JobCreateRequest) -> HostedJob:
@@ -124,7 +159,7 @@ def run_job(db: Session, job: HostedJob, request: JobCreateRequest) -> HostedJob
         job.reservation_expires_at = None
         db.commit()
         db.refresh(job)
-        _send_completion_email(job, result["summary"]["message"])
+        _send_completion_email(job, result["summary"]["message"], result)
         return job
     except Exception as exc:  # noqa: BLE001
         return _mark_retry_or_failure(db, job, exc)
@@ -154,7 +189,7 @@ def refresh_submitted_hpc_job(db: Session, job: HostedJob) -> HostedJob:
         job.reservation_expires_at = None
         db.commit()
         db.refresh(job)
-        _send_completion_email(job, payload["summary"]["message"])
+        _send_completion_email(job, payload["summary"]["message"], payload)
         return job
 
     db.commit()
