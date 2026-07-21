@@ -329,23 +329,6 @@ export default function HostedPage() {
     }
   }
 
-  const downloadDbPdb = async (structureId: string) => {
-    if (!job || !accessToken) return
-    try {
-      const r = await axios.get(`${API_BASE_URL}/jobs/files/${job.id}/pdb/${structureId}`, {
-        headers: { 'x-job-token': accessToken },
-        responseType: 'blob',
-      })
-      const url = window.URL.createObjectURL(r.data)
-      const a = document.createElement('a')
-      a.href = url; a.download = `${structureId}.pdb`
-      document.body.appendChild(a); a.click(); a.remove()
-      window.URL.revokeObjectURL(url)
-    } catch (err: any) {
-      setMessage(err?.response?.data?.detail || err?.message || 'Download failed.')
-    }
-  }
-
   const handlePrintPdf = () => {
     // The dark page background is applied as an inline style on <body>, which a
     // stylesheet cannot reach from inside a CSS module. Swap it for the print
@@ -630,7 +613,6 @@ export default function HostedPage() {
                       <th>Alignment</th>
                       <th>RMSD (Å)</th>
                       <th>Aligned Length</th>
-                      <th>Download</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -643,15 +625,6 @@ export default function HostedPage() {
                         <td><AlignmentTypeBadge type={m.alignment_type} /></td>
                         <td style={{ color: '#b8d4e8' }}>{m.rmsd.toFixed(2)}</td>
                         <td style={{ color: '#8899aa' }}>{m.aligned_length}</td>
-                        <td>
-                          <button
-                            className={styles.secondaryBtn}
-                            style={{ padding: '3px 10px', fontSize: '0.75rem' }}
-                            onClick={() => downloadDbPdb(m.structure)}
-                          >
-                            ↓ PDB
-                          </button>
-                        </td>
                       </tr>
                     ))}
                   </tbody>
