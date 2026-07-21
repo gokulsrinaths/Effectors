@@ -28,7 +28,10 @@ from main import (
     SEQUENCE_DB_INDEX_PATH,
     STRUCTURE_DB_PATH,
     ensure_blast_database_indexed,
-    SEQUENCE_DB_PATH
+    SEQUENCE_DB_PATH,
+    parse_tmalign_output,
+    StructureMatchResult,
+    _classify_structure_result,
 )
 
 # Initialize globals for testing
@@ -120,6 +123,76 @@ def test_tmalign_comparison():
     result = run_tmalign_binary(query_pdb, target_pdb, timeout=60)
     assert result is not None, "TM-align returned no result"
     assert 'tm_score' in result, "TM-align result missing tm_score"
+    assert 'tm_score_chain1' in result, "TM-align result missing Chain 1 score"
+    assert 'tm_score_chain2' in result, "TM-align result missing Chain 2 score"
+
+
+def test_parse_tmalign_two_normalized_scores():
+    output = """
+Aligned length= 143, RMSD= 2.31, Seq_ID=n_identical/n_aligned= 0.154
+TM-score= 0.61234 (if normalized by length of Chain_1, i.e., LN=180, d0=5.02)
+TM-score= 0.73456 (if normalized by length of Chain_2, i.e., LN=150, d0=4.56)
+"""
+    result = parse_tmalign_output(output)
+    assert result is not None
+    assert result["tm_score"] == pytest.approx(0.61234)
+    assert result["tm_score_chain1"] == pytest.approx(0.61234)
+    assert result["tm_score_chain2"] == pytest.approx(0.73456)
+    assert result["rmsd"] == pytest.approx(2.31)
+    assert result["aligned_length"] == 143
+
+
+def test_parse_tmalign_allows_missing_chain2():
+    output = """
+Aligned length= 90, RMSD= 3.10
+TM-score= 0.45678 (if normalized by length of Chain_1)
+"""
+    result = parse_tmalign_output(output)
+    assert result is not None
+    assert result["tm_score"] == pytest.approx(0.45678)
+    assert result["tm_score_chain1"] == pytest.approx(0.45678)
+    assert result["tm_score_chain2"] is None
+
+
+def test_parse_tmalign_equal_scores_remain_equal():
+    output = """
+Aligned length= 100, RMSD= 0.00
+TM-score= 1.00000 (if normalized by length of Chain_1)
+TM-score= 1.00000 (if normalized by length of Chain_2)
+"""
+    result = parse_tmalign_output(output)
+    assert result is not None
+    assert result["tm_score_chain1"] == result["tm_score_chain2"] == 1.0
+
+
+def test_parse_tmalign_requires_chain1():
+    output = "TM-score= 0.76543 (if normalized by length of Chain_2)"
+    assert parse_tmalign_output(output) is None
+
+
+def test_classification_contract_propagates_both_scores():
+    match = StructureMatchResult(
+        status="matched",
+        tm_score=0.49,
+        tm_score_chain1=0.49,
+        tm_score_chain2=0.74,
+        rmsd=2.3,
+        matched_structure="target_1",
+        method_used="TM-align",
+        alignment_length=143,
+        top_matches=[{
+            "structure": "target_1",
+            "tm_score": 0.49,
+            "tm_score_chain1": 0.49,
+            "tm_score_chain2": 0.74,
+        }],
+    )
+    result = _classify_structure_result(match, "query_1")
+    assert result.classification == "Novel structure"
+    assert result.tm_score == pytest.approx(0.49)
+    assert result.tm_align_result["tm_score_chain1"] == pytest.approx(0.49)
+    assert result.tm_align_result["tm_score_chain2"] == pytest.approx(0.74)
+    assert result.tm_align_result["top_matches"][0]["tm_score_chain2"] == pytest.approx(0.74)
 
 
 def test_path_conversion():

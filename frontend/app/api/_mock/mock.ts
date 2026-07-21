@@ -36,6 +36,7 @@ function makeTm(seed: number): TmAlignResult {
   const r1 = pseudo(seed)
   const r2 = pseudo(seed ^ 0x9e3779b9)
   const tm = clamp(0.35 + r1 * 0.55, 0.2, 0.95)
+  const tmChain2 = clamp(tm + (r2 - 0.5) * 0.18, 0.2, 0.99)
   const rmsd = clamp(1.2 + r2 * 6.5, 0.8, 9.9)
   const aln = Math.floor(120 + r1 * 260)
   const targets = [
@@ -48,6 +49,8 @@ function makeTm(seed: number): TmAlignResult {
   return {
     target_id: pick(targets, seed),
     tm_score: Number(tm.toFixed(3)),
+    tm_score_chain1: Number(tm.toFixed(3)),
+    tm_score_chain2: Number(tmChain2.toFixed(3)),
     rmsd: Number(rmsd.toFixed(2)),
     alignment_length: aln,
   }
@@ -202,4 +205,3 @@ export function mockFastaResult(fastaText: string): ProcessingResult {
     alphafold_queued: results.some(r => r.classification.includes('prediction required')),
   }
 }
-
