@@ -11,6 +11,11 @@ export interface TmAlignResult {
   tm_score: number
   tm_score_chain1?: number
   tm_score_chain2?: number
+  tm_score_best?: number
+  alignment_type?: string
+  coverage_query?: number
+  coverage_target?: number
+  seq_id?: number
   rmsd: number
   alignment_length: number
 }

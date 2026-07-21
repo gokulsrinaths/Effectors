@@ -386,8 +386,14 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* TM-score quality thresholds: >= 0.5 shared fold, >= 0.3 weak, below unrelated. */
+.scoreGood { color: #1a7f37; }
+.scoreWeak { color: #b35c00; }
+.scorePoor { color: #b32020; }
+
+/* Marks the larger of the two normalized scores. Deliberately no color —
+   color is reserved for the TM-score quality thresholds. */
 .scoreHigher {
-  color: #087f23;
   font-weight: 700;
 }
 
@@ -395,13 +401,107 @@
   display: inline-block;
   padding: 1px 5px;
   border-radius: 999px;
-  background: #dff4e4;
-  color: #087f23;
+  background: #eceff3;
+  color: #5b6675;
   font-family: inherit;
   font-size: 0.62rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   text-transform: uppercase;
+}
+
+/* ── Score legend ────────────────────────────────────────────────────────── */
+
+.legend {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid #dee2e6;
+  border-left: 3px solid #0b6bcb;
+  border-radius: 6px;
+  background: #f8f9fb;
+  break-inside: avoid;
+}
+
+.legendLead {
+  margin: 0 0 8px;
+  color: #495057;
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+
+.legendLead strong { color: #212529; }
+
+.legendBands {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  margin: 0 0 6px;
+  padding: 0;
+  list-style: none;
+  color: #495057;
+  font-size: 0.76rem;
+}
+
+.legendBands strong { color: #212529; }
+
+.legendCite {
+  margin: 0;
+  color: #6c757d;
+  font-size: 0.7rem;
+  font-style: italic;
+}
+
+/* ── Print ───────────────────────────────────────────────────────────────── */
+
+@media print {
+  .inputPanel,
+  .tabs,
+  .tabContent,
+  .expandButton,
+  .footer {
+    display: none !important;
+  }
+
+  /* Score quality is encoded only in color on screen, which a monochrome print
+     destroys. Force black and re-encode the band as text. */
+  .scoreValue,
+  .scoreGood,
+  .scoreWeak,
+  .scorePoor {
+    color: black !important;
+  }
+  .scoreValue.scoreGood::after { content: " (same fold)"; }
+  .scoreValue.scoreWeak::after { content: " (ambiguous)"; }
+  .scoreValue.scorePoor::after { content: " (unrelated)"; }
+  .scoreValue.scoreGood::after,
+  .scoreValue.scoreWeak::after,
+  .scoreValue.scorePoor::after {
+    font-size: 0.72em;
+    font-style: italic;
+    white-space: nowrap;
+  }
+
+  .higherBadge {
+    border: 1px solid #999 !important;
+    background: white !important;
+    color: black !important;
+  }
+
+  /* The legend is the key to every number on the page — it must print. */
+  .legend {
+    display: block !important;
+    background: white;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .legend,
+  .legendLead,
+  .legendLead strong,
+  .legendBands,
+  .legendBands strong,
+  .legendCite {
+    color: black !important;
+  }
 }
 
 .footer {

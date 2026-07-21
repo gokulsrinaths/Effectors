@@ -30,14 +30,65 @@ interface TmAlignResult {
   tm_score: number
   tm_score_chain1?: number
   tm_score_chain2?: number
+  tm_score_best?: number
+  alignment_type?: string
+  coverage_query?: number
+  coverage_target?: number
+  seq_id?: number
   rmsd: number
   alignment_length: number
+}
+
+// Bands per Zhang & Skolnick 2005: below 0.20 is indistinguishable from randomly
+// chosen unrelated proteins; 0.50 and above implies the same SCOP/CATH fold.
+const TM_SAME_FOLD_MIN = 0.5
+const TM_UNRELATED_MAX = 0.2
+
+function tmScoreColor(score?: number) {
+  if (score == null) return ''
+  if (score >= TM_SAME_FOLD_MIN) return styles.scoreGood
+  if (score >= TM_UNRELATED_MAX) return styles.scoreWeak
+  return styles.scorePoor
+}
+
+const ALIGNMENT_TYPE_TEXT: Record<string, string> = {
+  full_fold: 'Same fold',
+  domain_match: 'Domain match',
+  ambiguous: 'Ambiguous',
+  unrelated: 'Unrelated',
+}
+
+function fmtPct(v?: number): string {
+  if (v == null) return '—'
+  return `${(v * 100).toFixed(0)}%`
+}
+
+function ScoreLegend() {
+  return (
+    <div className={styles.legend}>
+      <p className={styles.legendLead}>
+        TM-align reports <strong>two</strong> scores because structural similarity is
+        directional. <strong>Chain 1</strong> is normalized by the length of your query;
+        <strong> Chain 2</strong> by the length of the database structure. A high Chain 2
+        with a low Chain 1 means your query <em>contains</em> that structure as a domain
+        rather than matching it as a whole.
+      </p>
+      <ul className={styles.legendBands}>
+        <li><span className={styles.scoreGood}>■</span> <strong>≥ 0.50</strong> — same fold (SCOP/CATH)</li>
+        <li><span className={styles.scoreWeak}>■</span> <strong>0.20 – 0.50</strong> — ambiguous</li>
+        <li><span className={styles.scorePoor}>■</span> <strong>&lt; 0.20</strong> — unrelated, at the level of randomly chosen proteins</li>
+      </ul>
+      <p className={styles.legendCite}>
+        Thresholds per Zhang &amp; Skolnick, <em>Nucleic Acids Research</em> 33:2302–2309 (2005).
+      </p>
+    </div>
+  )
 }
 
 function TmScoreValue({ value, other }: { value?: number; other?: number }) {
   const isHigher = value != null && other != null && value > other
   return (
-    <span className={`${styles.scoreValue} ${isHigher ? styles.scoreHigher : ''}`}>
+    <span className={`${styles.scoreValue} ${tmScoreColor(value)} ${isHigher ? styles.scoreHigher : ''}`}>
       {value != null ? value.toFixed(3) : '—'}
       {isHigher && <span className={styles.higherBadge}>Higher</span>}
     </span>
@@ -572,7 +623,11 @@ function ResultRow({
 
   const classColor = (c: string) => {
     if (c.includes('Already in database')) return '#28a745'
-    if (c.includes('Known structural family') || c.includes('Structurally similar')) return '#e6a817'
+    if (c.includes('Known structural family')) return '#1a7f37'
+    // A domain match means the query contains a known effector fold — a finding,
+    // not a weak result, so it must not share the "novel/nothing found" color.
+    if (c.includes('Partial') || c.includes('domain')) return '#0b6bcb'
+    if (c.includes('Ambiguous')) return '#b35c00'
     if (c.includes('Novel') || c.includes('missing') || c.includes('required')) return '#dc3545'
     return '#6c757d'
   }
@@ -624,6 +679,7 @@ function ResultRow({
               {result.tm_align_result && (
                 <div>
                   <h4>TM-align</h4>
+                  <ScoreLegend />
                   <ul>
                     <li>Target: {result.tm_align_result.target_id}</li>
                     <li>
@@ -634,6 +690,25 @@ function ResultRow({
                       Target-normalized TM-score (Chain 2):{' '}
                       <TmScoreValue value={chain2Score} other={chain1Score} />
                     </li>
+                    {result.tm_align_result.alignment_type && (
+                      <li>
+                        Alignment:{' '}
+                        <strong>
+                          {ALIGNMENT_TYPE_TEXT[result.tm_align_result.alignment_type]
+                            ?? result.tm_align_result.alignment_type}
+                        </strong>
+                      </li>
+                    )}
+                    {(result.tm_align_result.coverage_query != null
+                      || result.tm_align_result.coverage_target != null) && (
+                      <li>
+                        Coverage: {fmtPct(result.tm_align_result.coverage_query)} of query,{' '}
+                        {fmtPct(result.tm_align_result.coverage_target)} of target
+                      </li>
+                    )}
+                    {result.tm_align_result.seq_id != null && (
+                      <li>Structural sequence identity: {fmtPct(result.tm_align_result.seq_id)}</li>
+                    )}
                     <li>RMSD: {result.tm_align_result.rmsd.toFixed(2)} Å</li>
                     <li>Alignment Length: {result.tm_align_result.alignment_length}</li>
                   </ul>

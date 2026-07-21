@@ -29,8 +29,25 @@ interface TmMatch {
   tm_score: number
   tm_score_chain1?: number
   tm_score_chain2?: number
+  tm_score_best?: number
+  alignment_type?: string
+  coverage_query?: number
+  coverage_target?: number
   rmsd: number
   aligned_length: number
+}
+
+interface TmAlign {
+  tm_score?: number
+  tm_score_chain1?: number
+  tm_score_chain2?: number
+  tm_score_best?: number
+  alignment_type?: string
+  coverage_query?: number
+  coverage_target?: number
+  seq_id?: number
+  rmsd?: number
+  top_matches?: TmMatch[]
 }
 
 interface HostedResult {
@@ -38,7 +55,7 @@ interface HostedResult {
     results?: Array<{
       query_id?: string
       blast_result?: { e_value?: number; identity?: number; hit_id?: string }
-      tm_align_result?: { tm_score?: number; tm_score_chain1?: number; tm_score_chain2?: number; rmsd?: number; top_matches?: TmMatch[] }
+      tm_align_result?: TmAlign
       classification?: string
       best_match_id?: string
     }>
@@ -69,16 +86,37 @@ function statusDotColor(s: string) {
 
 function classificationStyle(c?: string) {
   if (!c) return ''
-  if (c.toLowerCase().includes('known') || c.toLowerCase().includes('already')) return styles.classKnown
-  if (c.toLowerCase().includes('similar')) return styles.classSimilar
+  const s = c.toLowerCase()
+  if (s.includes('known') || s.includes('already')) return styles.classKnown
+  // Checked before 'similar' so "Partial / domain match" does not fall through
+  // to the "novel" style, which would be the opposite of what it means.
+  if (s.includes('partial') || s.includes('domain')) return styles.classDomain
+  if (s.includes('similar')) return styles.classSimilar
   return styles.classNovel
 }
 
+// Bands per Zhang & Skolnick 2005: below 0.20 is indistinguishable from randomly
+// chosen unrelated proteins; 0.50 and above implies the same SCOP/CATH fold.
+const TM_SAME_FOLD_MIN = 0.5
+const TM_UNRELATED_MAX = 0.2
+
 function tmScoreColor(score?: number) {
   if (score == null) return ''
-  if (score >= 0.5) return styles.metricGreen
-  if (score >= 0.3) return styles.metricYellow
+  if (score >= TM_SAME_FOLD_MIN) return styles.metricGreen
+  if (score >= TM_UNRELATED_MAX) return styles.metricYellow
   return styles.metricRed
+}
+
+const ALIGNMENT_TYPE_TEXT: Record<string, string> = {
+  full_fold: 'Same fold',
+  domain_match: 'Domain match',
+  ambiguous: 'Ambiguous',
+  unrelated: 'Unrelated',
+}
+
+function fmtPct(v?: number): string {
+  if (v == null) return '—'
+  return `${(v * 100).toFixed(0)}%`
 }
 
 function fmt(v: unknown, decimals = 3): string {
@@ -95,10 +133,39 @@ function fmtEval(v?: number): string {
 function TmScoreValue({ value, other }: { value?: number; other?: number }) {
   const isHigher = value != null && other != null && value > other
   return (
-    <span className={`${styles.scoreValue} ${isHigher ? styles.scoreHigher : ''}`}>
+    <span className={`${styles.scoreValue} ${tmScoreColor(value)} ${isHigher ? styles.scoreHigher : ''}`}>
       {value != null ? value.toFixed(3) : '—'}
       {isHigher && <span className={styles.higherBadge}>Higher</span>}
     </span>
+  )
+}
+
+function AlignmentTypeBadge({ type }: { type?: string }) {
+  if (!type) return <span className={styles.metricValue}>—</span>
+  return (
+    <span className={`${styles.alignBadge} ${styles[`align_${type}`] || ''}`}>
+      {ALIGNMENT_TYPE_TEXT[type] || type}
+    </span>
+  )
+}
+
+function ScoreLegend() {
+  return (
+    <div className={styles.legend}>
+      <p className={styles.legendLead}>
+        TM-align reports <strong>two</strong> scores because structural similarity is
+        directional. <strong>Chain 1</strong> is normalized by the length of your query;
+        <strong> Chain 2</strong> by the length of the database structure. A high Chain 2
+        with a low Chain 1 means your query <em>contains</em> that structure as a domain
+        rather than matching it as a whole — a real hit that a single score would hide.
+      </p>
+      <ul className={styles.legendBands}>
+        <li><span className={styles.metricGreen}>■</span> <strong>≥ 0.50</strong> — same fold (SCOP/CATH)</li>
+        <li><span className={styles.metricYellow}>■</span> <strong>0.20 – 0.50</strong> — ambiguous</li>
+        <li><span className={styles.metricRed}>■</span> <strong>&lt; 0.20</strong> — unrelated, at the level of randomly chosen proteins</li>
+      </ul>
+      <p className={styles.legendCite}>Thresholds per Zhang &amp; Skolnick, <em>Nucleic Acids Research</em> 33:2302–2309 (2005).</p>
+    </div>
   )
 }
 
@@ -279,13 +346,33 @@ export default function HostedPage() {
     }
   }
 
-  const handlePrintPdf = () => window.print()
+  const handlePrintPdf = () => {
+    // The dark page background is applied as an inline style on <body>, which a
+    // stylesheet cannot reach from inside a CSS module. Swap it for the print
+    // and put it back afterwards.
+    const prev = document.body.style.backgroundColor
+    document.body.style.backgroundColor = '#ffffff'
+    const restore = () => {
+      document.body.style.backgroundColor = prev
+      window.removeEventListener('afterprint', restore)
+    }
+    window.addEventListener('afterprint', restore)
+    window.print()
+  }
 
   // Derived metrics from result
   const firstResult  = result?.processing_result?.results?.[0]
-  const tmScore      = firstResult?.tm_align_result?.tm_score ?? (result?.summary?.tm_score as number | undefined)
-  const tmScoreChain1 = firstResult?.tm_align_result?.tm_score_chain1 ?? tmScore
-  const tmScoreChain2 = firstResult?.tm_align_result?.tm_score_chain2
+  const tmAlign      = firstResult?.tm_align_result
+  const summary      = result?.summary as Record<string, unknown> | undefined
+  const tmScore      = tmAlign?.tm_score ?? (summary?.tm_score as number | undefined)
+  const tmScoreChain1 = tmAlign?.tm_score_chain1 ?? (summary?.tm_score_chain1 as number | undefined) ?? tmScore
+  // Falls back to the summary so the target score still shows when only the
+  // condensed summary is available.
+  const tmScoreChain2 = tmAlign?.tm_score_chain2 ?? (summary?.tm_score_chain2 as number | undefined)
+  const alignmentType = tmAlign?.alignment_type ?? (summary?.alignment_type as string | undefined)
+  const coverageQuery = tmAlign?.coverage_query ?? (summary?.coverage_query as number | undefined)
+  const coverageTarget = tmAlign?.coverage_target ?? (summary?.coverage_target as number | undefined)
+  const seqIdentity   = tmAlign?.seq_id ?? (summary?.seq_id as number | undefined)
   const eValue       = firstResult?.blast_result?.e_value
   const identity     = firstResult?.blast_result?.identity
   const bestMatch    = firstResult?.best_match_id ?? (result?.summary?.best_match_id as string | undefined)
@@ -461,6 +548,8 @@ export default function HostedPage() {
               <span className={styles.panelTitle} style={{ color: '#00c864' }}>Analysis Results</span>
             </div>
 
+            <ScoreLegend />
+
             {/* Metrics row */}
             <div className={styles.metricsRow}>
               <div className={styles.metric}>
@@ -471,16 +560,30 @@ export default function HostedPage() {
                 }
               </div>
               <div className={styles.metric}>
+                <span className={styles.metricLabel}>Alignment</span>
+                <AlignmentTypeBadge type={alignmentType} />
+              </div>
+              <div className={styles.metric}>
                 <span className={styles.metricLabel}>TM-Score Query (Chain 1)</span>
-                <span className={`${styles.metricValue} ${tmScoreColor(tmScoreChain1)}`}>
+                <span className={styles.metricValue}>
                   <TmScoreValue value={tmScoreChain1} other={tmScoreChain2} />
                 </span>
               </div>
               <div className={styles.metric}>
                 <span className={styles.metricLabel}>TM-Score Target (Chain 2)</span>
-                <span className={`${styles.metricValue} ${tmScoreColor(tmScoreChain2)}`}>
+                <span className={styles.metricValue}>
                   <TmScoreValue value={tmScoreChain2} other={tmScoreChain1} />
                 </span>
+              </div>
+              <div className={styles.metric}>
+                <span className={styles.metricLabel}>Coverage (query / target)</span>
+                <span className={styles.metricValue} style={{ color: '#b8d4e8' }}>
+                  {fmtPct(coverageQuery)} / {fmtPct(coverageTarget)}
+                </span>
+              </div>
+              <div className={styles.metric}>
+                <span className={styles.metricLabel}>Structural Seq. Identity</span>
+                <span className={styles.metricValue} style={{ color: '#7a9abf' }}>{fmtPct(seqIdentity)}</span>
               </div>
               <div className={styles.metric}>
                 <span className={styles.metricLabel}>BLAST E-value</span>
@@ -515,6 +618,7 @@ export default function HostedPage() {
               <div className={styles.batchTable} id="tm-matches-table">
                 <div className={styles.batchHeader}>
                   <span className={styles.panelTitle}>Top TM-align Matches</span>
+                  <span className={styles.batchNote}>Ranked by the better of the two normalized scores</span>
                 </div>
                 <table className={styles.table}>
                   <thead>
@@ -523,6 +627,7 @@ export default function HostedPage() {
                       <th>Structure ID</th>
                       <th>Query TM-Score (Chain 1)</th>
                       <th>Target TM-Score (Chain 2)</th>
+                      <th>Alignment</th>
                       <th>RMSD (Å)</th>
                       <th>Aligned Length</th>
                       <th>Download</th>
@@ -535,6 +640,7 @@ export default function HostedPage() {
                         <td style={{ fontFamily: 'monospace', fontSize: '0.8rem', color: '#b8d4e8' }}>{m.structure}</td>
                         <td><TmScoreValue value={m.tm_score_chain1 ?? m.tm_score} other={m.tm_score_chain2} /></td>
                         <td><TmScoreValue value={m.tm_score_chain2} other={m.tm_score_chain1 ?? m.tm_score} /></td>
+                        <td><AlignmentTypeBadge type={m.alignment_type} /></td>
                         <td style={{ color: '#b8d4e8' }}>{m.rmsd.toFixed(2)}</td>
                         <td style={{ color: '#8899aa' }}>{m.aligned_length}</td>
                         <td>

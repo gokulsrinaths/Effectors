@@ -61,6 +61,11 @@ class StructureMatchResult(BaseModel):
     tm_score: Optional[float] = None
     tm_score_chain1: Optional[float] = None
     tm_score_chain2: Optional[float] = None
+    tm_score_best: Optional[float] = None
+    alignment_type: Optional[str] = None
+    coverage_query: Optional[float] = None
+    coverage_target: Optional[float] = None
+    seq_id: Optional[float] = None
     rmsd: Optional[float] = None
     matched_structure: Optional[str] = None
     method_used: str
@@ -76,6 +81,11 @@ class SequenceResult(BaseModel):
     tm_score: Optional[float] = None
     tm_score_chain1: Optional[float] = None
     tm_score_chain2: Optional[float] = None
+    tm_score_best: Optional[float] = None
+    alignment_type: Optional[str] = None
+    coverage_query: Optional[float] = None
+    coverage_target: Optional[float] = None
+    seq_id: Optional[float] = None
     rmsd: Optional[float] = None
     matched_structure: Optional[str] = None
     blast_hit_id: Optional[str] = None
@@ -84,6 +94,7 @@ class SequenceResult(BaseModel):
     blast_query_coverage: Optional[float] = None
     method_used: Optional[str] = None
     alignment_length: Optional[int] = None
+    top_matches: Optional[List[dict]] = []
 
 
 class MultiSequenceResult(BaseModel):
@@ -110,6 +121,20 @@ SEQUENCE_DB_INDEX_PATH = BASE_DIR / "effector_sequences"
 
 # Cache for TM-align results: key = (query_hash, target_filename), value = dict with tm_score, rmsd
 _tmalign_cache = {}
+
+# TM-align output parsing. Anchored to each field's own label so a stray number
+# elsewhere on the line cannot be picked up.
+_RE_LEN1  = re.compile(r'Length of Chain_1:\s*(\d+)')
+_RE_LEN2  = re.compile(r'Length of Chain_2:\s*(\d+)')
+_RE_ALIGN = re.compile(r'Aligned length\s*=\s*(\d+)')
+_RE_RMSD  = re.compile(r'RMSD\s*=\s*([\d.]+)')
+_RE_SEQID = re.compile(r'Seq_ID\s*=\s*n_identical/n_aligned\s*=\s*([\d.]+)')
+_RE_TM    = re.compile(r'TM-score\s*=\s*([\d.]+).*?normalized by length of (Chain_1|Chain_2)')
+
+# TM-score bands, per Zhang & Skolnick 2005: below 0.20 is indistinguishable from
+# randomly chosen unrelated proteins; 0.50 and above implies the same SCOP/CATH fold.
+TM_UNRELATED_MAX = 0.20
+TM_SAME_FOLD_MIN = 0.50
 
 # Cache for structure files list
 _structure_files_cache = None
@@ -506,63 +531,104 @@ def parse_tmalign_output(output: str) -> Optional[dict]:
     alignment length. ``tm_score`` remains an alias for the Chain_1 score so
     existing ranking and classification behavior stays backward compatible.
     """
-    lines = output.split('\n')
     tm_score_chain1 = None
     tm_score_chain2 = None
     rmsd = None
     aligned_length = None
-    
-    for line in lines:
+    chain1_length = None
+    chain2_length = None
+    seq_id = None
+
+    def _first(current, pattern, line, cast):
+        """Keep the first match for a field; later lines never overwrite it."""
+        if current is not None:
+            return current
+        m = pattern.search(line)
+        if not m:
+            return None
+        try:
+            return cast(m.group(1))
+        except (ValueError, TypeError):
+            return None
+
+    for line in output.split('\n'):
         line = line.strip()
-        
+
         # TM-align emits one score normalized by each chain length. The query is
         # passed as Chain_1 and the database target as Chain_2.
-        if 'TM-score=' in line and ('Chain_1' in line or 'Chain_2' in line):
+        m = _RE_TM.search(line)
+        if m:
             try:
-                parts = line.split('TM-score=')
-                if len(parts) > 1:
-                    score_part = parts[1].strip()
-                    match = re.search(r'(\d+\.?\d*)', score_part)
-                    if match:
-                        score = float(match.group(1))
-                        if 'Chain_1' in line:
-                            tm_score_chain1 = score
-                        elif 'Chain_2' in line:
-                            tm_score_chain2 = score
-            except (ValueError, IndexError, AttributeError) as e:
+                score = float(m.group(1))
+                if m.group(2) == 'Chain_1' and tm_score_chain1 is None:
+                    tm_score_chain1 = score
+                elif m.group(2) == 'Chain_2' and tm_score_chain2 is None:
+                    tm_score_chain2 = score
+            except ValueError as e:
                 logger.warning(f"Failed to parse TM-score: {e}")
-        
-        # Parse RMSD
-        if rmsd is None and 'RMSD=' in line:
-            try:
-                parts = line.split('RMSD=')
-                if len(parts) > 1:
-                    rmsd_part = parts[1].strip()
-                    match = re.search(r'(\d+\.?\d*)', rmsd_part)
-                    if match:
-                        rmsd = float(match.group(1))
-            except (ValueError, IndexError, AttributeError):
-                pass
-        
-        # Parse alignment length (number of aligned residues)
-        if 'Aligned length=' in line or 'Number of residues=' in line:
-            try:
-                match = re.search(r'(\d+)', line)
-                if match:
-                    aligned_length = int(match.group(1))
-            except (ValueError, AttributeError):
-                pass
-    
+
+        rmsd = _first(rmsd, _RE_RMSD, line, float)
+        aligned_length = _first(aligned_length, _RE_ALIGN, line, int)
+        chain1_length = _first(chain1_length, _RE_LEN1, line, int)
+        chain2_length = _first(chain2_length, _RE_LEN2, line, int)
+        seq_id = _first(seq_id, _RE_SEQID, line, float)
+
     if tm_score_chain1 is None:
         logger.warning("Could not find TM-score normalized by Chain_1 in TM-align output")
         return None
-    
+
     return {
         'tm_score': tm_score_chain1,
         'tm_score_chain1': tm_score_chain1,
         'tm_score_chain2': tm_score_chain2,
         'rmsd': rmsd if rmsd is not None else 0.0,
-        'aligned_length': aligned_length if aligned_length is not None else 0
+        'aligned_length': aligned_length if aligned_length is not None else 0,
+        'chain1_length': chain1_length,
+        'chain2_length': chain2_length,
+        'seq_id': seq_id,
+    }
+
+
+def derive_alignment_metrics(parsed: dict) -> dict:
+    """Derive both-score metrics from a parsed TM-align result.
+
+    Kept separate from parsing so it can also be applied to cache entries written
+    by an older process shape, which predate these keys.
+    """
+    c1 = parsed.get('tm_score_chain1', parsed.get('tm_score'))
+    c2 = parsed.get('tm_score_chain2')
+
+    # A missing Chain_2 score means TM-align reported only one normalization.
+    # Fall back to Chain_1 rather than 0.0, which would demote the record.
+    if c1 is None:
+        c1 = parsed.get('tm_score') or 0.0
+    effective_c2 = c1 if c2 is None else c2
+
+    best = max(c1, effective_c2)
+    worst = min(c1, effective_c2)
+
+    if best >= TM_SAME_FOLD_MIN and worst >= TM_SAME_FOLD_MIN:
+        alignment_type = 'full_fold'
+    elif best >= TM_SAME_FOLD_MIN:
+        # One structure is well covered but the other is not: the larger protein
+        # contains the smaller one as a domain rather than matching it wholly.
+        alignment_type = 'domain_match'
+    elif best < TM_UNRELATED_MAX:
+        alignment_type = 'unrelated'
+    else:
+        alignment_type = 'ambiguous'
+
+    def _coverage(length):
+        aligned = parsed.get('aligned_length') or 0
+        if not length or not aligned:
+            return None
+        return round(aligned / length, 4)
+
+    return {
+        'tm_score_best': best,
+        'alignment_type': alignment_type,
+        'coverage_query': _coverage(parsed.get('chain1_length')),
+        'coverage_target': _coverage(parsed.get('chain2_length')),
     }
 
 
@@ -774,19 +840,97 @@ def lookup_structure_by_id(sequence_id: str) -> Optional[str]:
     return None
 
 
-def interpret_tm_score(tm_score: float) -> str:
+def interpret_tm_score(tm_score: float, tm_score_chain2: Optional[float] = None) -> str:
     """
-    Interpret TM-score according to thresholds:
-    <0.3 = unrelated
-    0.3-0.5 = possible similarity
-    >0.5 = same fold
+    Interpret a TM-align comparison using both normalized scores.
+
+    Bands follow Zhang & Skolnick 2005: below 0.20 is indistinguishable from
+    randomly chosen unrelated proteins, 0.50 and above implies the same fold.
+
+    When only one score is well above 0.50 the two structures are not equivalent
+    wholes — the larger contains the smaller as a domain. Chain 2 defaults to
+    Chain 1 so single-score callers keep their previous meaning.
     """
-    if tm_score < 0.3:
-        return "unrelated"
-    elif tm_score < 0.5:
-        return "possible_similarity"
-    else:
+    c2 = tm_score if tm_score_chain2 is None else tm_score_chain2
+    best = max(tm_score, c2)
+    worst = min(tm_score, c2)
+
+    if best >= TM_SAME_FOLD_MIN and worst < TM_SAME_FOLD_MIN:
+        return "domain_match"
+    if best >= TM_SAME_FOLD_MIN:
         return "same_fold"
+    if best < TM_UNRELATED_MAX:
+        return "unrelated"
+    return "ambiguous"
+
+
+# Maps an alignment_type onto the label shown to users. Both the structure and
+# sequence paths share this so they cannot drift apart.
+ALIGNMENT_TYPE_LABELS = {
+    'full_fold':    "Known structural family",
+    'domain_match': "Partial / domain match",
+    'ambiguous':    "Ambiguous structural similarity",
+    'unrelated':    "Novel structure",
+}
+
+
+def classify_alignment(tm_align_result: dict) -> str:
+    """Human-facing classification for a TM-align match dict.
+
+    When ``alignment_type`` is absent the type is derived from the raw scores, so
+    payloads produced before that field existed — or by a deployment that has not
+    picked up this code yet — still classify correctly rather than silently
+    falling back to the old Chain-1-only behavior.
+    """
+    alignment_type = tm_align_result.get('alignment_type')
+    if not alignment_type:
+        alignment_type = derive_alignment_metrics(tm_align_result)['alignment_type']
+    return ALIGNMENT_TYPE_LABELS.get(alignment_type, "Novel structure")
+
+
+def _match_from_parsed(db_filename: str, parsed: dict, cached: bool) -> dict:
+    """Build one match record from a parsed TM-align result.
+
+    Both the cache-hit and cache-miss paths go through here so the two can never
+    produce different key sets. Also back-fills derived fields onto cache entries
+    written before those fields existed.
+    """
+    tm_score = parsed.get('tm_score')
+    chain1 = parsed.get('tm_score_chain1', tm_score)
+    chain2 = parsed.get('tm_score_chain2')
+    derived = derive_alignment_metrics(parsed)
+    return {
+        'structure': db_filename,
+        'tm_score': tm_score,
+        'tm_score_chain1': chain1,
+        'tm_score_chain2': chain2,
+        'rmsd': parsed.get('rmsd', 0.0),
+        'aligned_length': parsed.get('aligned_length', 0),
+        'chain1_length': parsed.get('chain1_length'),
+        'chain2_length': parsed.get('chain2_length'),
+        'seq_id': parsed.get('seq_id'),
+        'cached': cached,
+        'interpretation': interpret_tm_score(chain1, chain2),
+        **derived,
+    }
+
+
+def sort_matches(matches: List[dict]) -> None:
+    """Rank matches in place by the better of the two normalized TM-scores.
+
+    A structure that is a perfect sub-domain of the query scores low on Chain 1
+    but near 1.0 on Chain 2, so ranking on Chain 1 alone buries it. The
+    tiebreakers make the order total: without them ties resolve by filesystem
+    iteration order and the dev box and HPC clone disagree on the best match.
+    """
+    matches.sort(
+        key=lambda m: (
+            m.get('tm_score_best') or 0.0,
+            m.get('tm_score_chain1') or 0.0,
+            m.get('structure') or '',
+        ),
+        reverse=True,
+    )
 
 
 def normalize_sequence_input(sequence: str, sequence_id: Optional[str] = None) -> Tuple[str, str]:
@@ -973,6 +1117,8 @@ async def upload_structure(file: UploadFile = File(...)):
                     tm_score=1.0,
                     tm_score_chain1=1.0,
                     tm_score_chain2=1.0,
+                    tm_score_best=1.0,
+                    alignment_type="full_fold",
                     rmsd=0.0,
                     matched_structure=query_filename,
                     method_used="filename_match",
@@ -999,36 +1145,16 @@ async def upload_structure(file: UploadFile = File(...)):
             # Check cache
             cache_key = (query_hash, db_filename)
             if cache_key in _tmalign_cache:
-                cached_result = _tmalign_cache[cache_key]
-                matches.append({
-                    'structure': db_filename,
-                    'tm_score': cached_result['tm_score'],
-                    'tm_score_chain1': cached_result.get('tm_score_chain1', cached_result['tm_score']),
-                    'tm_score_chain2': cached_result.get('tm_score_chain2'),
-                    'rmsd': cached_result.get('rmsd', 0.0),
-                    'aligned_length': cached_result.get('aligned_length', 0),
-                    'cached': True
-                })
+                matches.append(_match_from_parsed(db_filename, _tmalign_cache[cache_key], cached=True))
             else:
                 # Run TM-align via WSL
                 try:
                     result = run_tmalign_binary(tmp_path, str(db_file))
                     comparisons_done += 1
-                    
+
                     if result:
-                        tm_score = result['tm_score']
                         _tmalign_cache[cache_key] = result
-                        
-                        matches.append({
-                            'structure': db_filename,
-                            'tm_score': tm_score,
-                            'tm_score_chain1': result.get('tm_score_chain1', tm_score),
-                            'tm_score_chain2': result.get('tm_score_chain2'),
-                            'rmsd': result.get('rmsd', 0.0),
-                            'aligned_length': result.get('aligned_length', 0),
-                            'cached': False,
-                            'interpretation': interpret_tm_score(tm_score)
-                        })
+                        matches.append(_match_from_parsed(db_filename, result, cached=False))
                 except RuntimeError as e:
                     logger.error(f"TM-align failed for {db_filename}: {e}")
                     # Continue with other structures rather than failing completely
@@ -1049,17 +1175,23 @@ async def upload_structure(file: UploadFile = File(...)):
                 top_matches=[]
             )
         
-        # Sort by TM-score (descending) and get top matches
-        matches.sort(key=lambda x: x['tm_score'], reverse=True)
+        # Rank by the better of the two normalized scores, so sub-domain matches
+        # (low Chain 1, high Chain 2) are not buried.
+        sort_matches(matches)
         top_matches = matches[:10]  # Top 10 matches
-        
+
         best_match = matches[0]
-        
+
         return StructureMatchResult(
             status="matched",
             tm_score=best_match['tm_score'],
             tm_score_chain1=best_match.get('tm_score_chain1', best_match['tm_score']),
             tm_score_chain2=best_match.get('tm_score_chain2'),
+            tm_score_best=best_match.get('tm_score_best'),
+            alignment_type=best_match.get('alignment_type'),
+            coverage_query=best_match.get('coverage_query'),
+            coverage_target=best_match.get('coverage_target'),
+            seq_id=best_match.get('seq_id'),
             rmsd=best_match.get('rmsd', 0.0),
             matched_structure=best_match['structure'],
             method_used="TM-align",
@@ -1157,69 +1289,62 @@ async def upload_sequence(sequence: str, sequence_id: Optional[str] = None):
             method_used="BLAST"
         )
 
-    best_tm_score = 0.0
-    best_tm_score_chain1 = 0.0
-    best_tm_score_chain2 = None
-    best_rmsd = 0.0
-    best_match_structure = None
-    best_aligned_length = 0
-    
+    # Accumulate then sort, mirroring the structure path, so both rank on the
+    # better of the two normalized scores and both emit a top_matches list.
+    matches: List[dict] = []
     structure_hash = compute_file_hash(structure_path)
-    
+
     for db_file in db_files:
         db_filename = db_file.stem
-        
-        # Skip self-comparison
+
+        # Self-comparison: a perfect match on both normalizations. Let it compete
+        # in the sort rather than short-circuiting the loop.
         if str(db_file) == structure_path:
-            best_tm_score = 1.0
-            best_tm_score_chain1 = 1.0
-            best_tm_score_chain2 = 1.0
-            best_rmsd = 0.0
-            best_match_structure = os.path.basename(structure_path)
+            matches.append(_match_from_parsed(
+                os.path.basename(structure_path),
+                {'tm_score': 1.0, 'tm_score_chain1': 1.0, 'tm_score_chain2': 1.0, 'rmsd': 0.0},
+                cached=False,
+            ))
             continue
-        
+
         # Check cache
         cache_key = (structure_hash, db_filename)
         if cache_key in _tmalign_cache:
-            cached_result = _tmalign_cache[cache_key]
-            tm_score = cached_result['tm_score']
-            tm_score_chain1 = cached_result.get('tm_score_chain1', tm_score)
-            tm_score_chain2 = cached_result.get('tm_score_chain2')
+            matches.append(_match_from_parsed(db_filename, _tmalign_cache[cache_key], cached=True))
         else:
             try:
                 tm_result = run_tmalign_binary(structure_path, str(db_file))
                 if tm_result is None:
                     continue
-                tm_score = tm_result['tm_score']
-                tm_score_chain1 = tm_result.get('tm_score_chain1', tm_score)
-                tm_score_chain2 = tm_result.get('tm_score_chain2')
                 _tmalign_cache[cache_key] = tm_result
+                matches.append(_match_from_parsed(db_filename, tm_result, cached=False))
             except RuntimeError as e:
                 logger.error(f"TM-align failed for {db_filename}: {e}")
                 continue
-        
-        if tm_score > best_tm_score:
-            best_tm_score = tm_score
-            best_tm_score_chain1 = tm_score_chain1
-            best_tm_score_chain2 = tm_score_chain2
-            best_rmsd = _tmalign_cache.get(cache_key, {}).get('rmsd', 0.0)
-            best_match_structure = db_filename
-            best_aligned_length = _tmalign_cache.get(cache_key, {}).get('aligned_length', 0)
+
+    sort_matches(matches)
+    best = matches[0] if matches else {}
 
     return SequenceResult(
         query_id=seq_id,
         status="blast_hit_with_structure",
-        tm_score=best_tm_score,
-        tm_score_chain1=best_tm_score_chain1,
-        tm_score_chain2=best_tm_score_chain2,
-        rmsd=best_rmsd,
-        matched_structure=best_match_structure or os.path.basename(structure_path),
+        tm_score=best.get('tm_score', 0.0),
+        tm_score_chain1=best.get('tm_score_chain1', 0.0),
+        tm_score_chain2=best.get('tm_score_chain2'),
+        tm_score_best=best.get('tm_score_best'),
+        alignment_type=best.get('alignment_type'),
+        coverage_query=best.get('coverage_query'),
+        coverage_target=best.get('coverage_target'),
+        seq_id=best.get('seq_id'),
+        rmsd=best.get('rmsd', 0.0),
+        matched_structure=best.get('structure') or os.path.basename(structure_path),
         blast_hit_id=hit_id,
         blast_evalue=blast_hit['evalue'],
         blast_identity=blast_hit['percent_identity'] / 100.0,
         blast_query_coverage=blast_hit['query_coverage'] / 100.0,
         method_used="BLAST+TM-align",
-        alignment_length=best_aligned_length or blast_hit['alignment_length']
+        top_matches=matches[:10],
+        alignment_length=best.get('aligned_length') or blast_hit['alignment_length']
     )
 
 
@@ -1398,16 +1523,6 @@ def _get_pdb_path_from_structure_name(structure_name: str) -> Optional[str]:
 
 def _classify_structure_result(match_result: StructureMatchResult, query_id: str) -> ClassificationResult:
     """Convert StructureMatchResult to ClassificationResult format."""
-    if match_result.status == "already_in_database":
-        classification = "Already in database"
-    elif match_result.status == "matched":
-        if match_result.tm_score and match_result.tm_score >= 0.5:
-            classification = "Known structural family"
-        else:
-            classification = "Novel structure"
-    else:
-        classification = "No matches found"
-    
     tm_align_result = None
     if match_result.tm_score is not None:
         tm_align_result = {
@@ -1415,10 +1530,22 @@ def _classify_structure_result(match_result: StructureMatchResult, query_id: str
             "tm_score": match_result.tm_score,
             "tm_score_chain1": match_result.tm_score_chain1 if match_result.tm_score_chain1 is not None else match_result.tm_score,
             "tm_score_chain2": match_result.tm_score_chain2,
+            "tm_score_best": match_result.tm_score_best,
+            "alignment_type": match_result.alignment_type,
+            "coverage_query": match_result.coverage_query,
+            "coverage_target": match_result.coverage_target,
+            "seq_id": match_result.seq_id,
             "rmsd": match_result.rmsd or 0.0,
             "alignment_length": match_result.alignment_length or 0,
             "top_matches": match_result.top_matches or [],
         }
+
+    if match_result.status == "already_in_database":
+        classification = "Already in database"
+    elif match_result.status == "matched":
+        classification = classify_alignment(tm_align_result or {})
+    else:
+        classification = "No matches found"
 
     return ClassificationResult(
         query_id=query_id,
@@ -1431,20 +1558,6 @@ def _classify_structure_result(match_result: StructureMatchResult, query_id: str
 
 def _classify_sequence_result(seq_result: SequenceResult, query_id: str) -> ClassificationResult:
     """Convert SequenceResult to ClassificationResult format."""
-    if seq_result.status == "novel_sequence":
-        classification = "Novel sequence - structure prediction required"
-    elif seq_result.status == "structure_missing":
-        classification = "Sequence found but structure missing - structure prediction required"
-    elif seq_result.status == "structure_found_no_comparison":
-        classification = "Structure found but cannot compare"
-    elif seq_result.status == "blast_hit_with_structure":
-        if seq_result.tm_score and seq_result.tm_score >= 0.5:
-            classification = "Known structural family"
-        else:
-            classification = "Structurally similar"
-    else:
-        classification = seq_result.status
-    
     blast_result = None
     if seq_result.blast_hit_id:
         blast_result = {
@@ -1462,10 +1575,30 @@ def _classify_sequence_result(seq_result: SequenceResult, query_id: str) -> Clas
             "tm_score": seq_result.tm_score,
             "tm_score_chain1": seq_result.tm_score_chain1 if seq_result.tm_score_chain1 is not None else seq_result.tm_score,
             "tm_score_chain2": seq_result.tm_score_chain2,
+            "tm_score_best": seq_result.tm_score_best,
+            "alignment_type": seq_result.alignment_type,
+            "coverage_query": seq_result.coverage_query,
+            "coverage_target": seq_result.coverage_target,
+            "seq_id": seq_result.seq_id,
             "rmsd": seq_result.rmsd or 0.0,
-            "alignment_length": seq_result.alignment_length or 0
+            "alignment_length": seq_result.alignment_length or 0,
+            "top_matches": seq_result.top_matches or [],
         }
-    
+
+    if seq_result.status == "novel_sequence":
+        classification = "Novel sequence - structure prediction required"
+    elif seq_result.status == "structure_missing":
+        classification = "Sequence found but structure missing - structure prediction required"
+    elif seq_result.status == "structure_found_no_comparison":
+        classification = "Structure found but cannot compare"
+    elif seq_result.status == "blast_hit_with_structure":
+        # Same ladder as the structure path. These two used to disagree: a
+        # TM-score of 0.05 read "Structurally similar" here but "Novel structure"
+        # there.
+        classification = classify_alignment(tm_align_result or {})
+    else:
+        classification = seq_result.status
+
     return ClassificationResult(
         query_id=query_id,
         classification=classification,
