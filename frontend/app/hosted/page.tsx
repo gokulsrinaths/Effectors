@@ -174,7 +174,6 @@ function ScoreLegend() {
 export default function HostedPage() {
   const [mounted, setMounted]         = useState(false)
   const [activeTab, setActiveTab]     = useState<'sequence' | 'upload'>('sequence')
-  const [email, setEmail]             = useState('')
   const [sequenceId, setSequenceId]   = useState('')
   const [sequence, setSequence]       = useState('')
   const [uploadType, setUploadType]   = useState<'structure' | 'fasta'>('structure')
@@ -260,9 +259,7 @@ export default function HostedPage() {
 
   const handleSequenceSubmit = async () => {
     if (!sequence.trim()) { setMessage('Sequence input is required.'); return }
-    // undefined, not '' — an omitted key keeps the backend storing NULL rather
-    // than an empty string.
-    const payload = { input_type: 'sequence', sequence: sequence.trim(), sequence_id: sequenceId || undefined, email: email.trim() || undefined, run_alphafold: runAlphafold }
+    const payload = { input_type: 'sequence', sequence: sequence.trim(), sequence_id: sequenceId || undefined, run_alphafold: runAlphafold }
     setLastPayload(payload)
     setSubmitting(true); setResult(null); setStructureImgUrl(null); setElapsedSecs(0)
     try {
@@ -282,7 +279,6 @@ export default function HostedPage() {
     setSubmitting(true); setResult(null); setStructureImgUrl(null); setElapsedSecs(0)
     const form = new FormData()
     form.append('input_type', uploadType)
-    if (email.trim()) form.append('email', email.trim())
     form.append('file', uploadFile)
     try {
       const r = await axios.post<HostedJob>(`${API_BASE_URL}/jobs/upload`, form, {
@@ -431,21 +427,11 @@ export default function HostedPage() {
           </div>
           <div className={styles.panelBody}>
 
-            {/* Shared across both tabs — both endpoints accept an email. */}
-            <div className={styles.field}>
-              <label className={styles.label}>Email (optional)</label>
-              <input
-                className={styles.input}
-                type="email"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                placeholder="you@university.edu"
-              />
-              <p className={styles.fieldHint}>
-                We&apos;ll email a PDF report of your results when the job finishes.
-                Leave blank to skip — results still appear on this page either way.
-              </p>
-            </div>
+            {/* Email field intentionally hidden: Railway blocks outbound SMTP
+                (Errno 101, no route to port 587), so a delivery promise here
+                would be false. The backend plumbing — the email column, request
+                schema, PDF generation and send path — is all still in place;
+                restore this block once an HTTP-API mail provider is configured. */}
 
             {/* Tabs */}
             <div className={styles.tabs}>
