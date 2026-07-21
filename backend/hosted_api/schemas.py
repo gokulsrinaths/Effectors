@@ -19,7 +19,15 @@ class JobCreateRequest(BaseModel):
 class JobSummary(BaseModel):
     classification: str
     best_match_id: str | None = None
+    # tm_score is the Chain 1 (query-normalized) score, kept for compatibility.
     tm_score: float | None = None
+    tm_score_chain1: float | None = None
+    tm_score_chain2: float | None = None
+    tm_score_best: float | None = None
+    alignment_type: str | None = None
+    coverage_query: float | None = None
+    coverage_target: float | None = None
+    seq_id: float | None = None
     blast_hit_id: str | None = None
     message: str
 

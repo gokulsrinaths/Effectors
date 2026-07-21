@@ -36,10 +36,20 @@ def _build_summary(processing_result: dict[str, Any]) -> dict[str, Any]:
     results = processing_result.get("results", [])
     first = results[0] if results else {}
     blast_result = first.get("blast_result") or {}
+    tm = first.get("tm_align_result") or {}
     return {
         "classification": first.get("classification", "no-result"),
         "best_match_id": first.get("best_match_id"),
         "tm_score": first.get("tm_score"),
+        # Both normalizations, so the summary-only fallback path can still show
+        # the target-normalized score and the alignment type.
+        "tm_score_chain1": tm.get("tm_score_chain1", first.get("tm_score")),
+        "tm_score_chain2": tm.get("tm_score_chain2"),
+        "tm_score_best": tm.get("tm_score_best"),
+        "alignment_type": tm.get("alignment_type"),
+        "coverage_query": tm.get("coverage_query"),
+        "coverage_target": tm.get("coverage_target"),
+        "seq_id": tm.get("seq_id"),
         "blast_hit_id": blast_result.get("hit_id"),
         "message": (
             f"Job completed with {len(results)} result item(s). "
