@@ -174,6 +174,7 @@ function ScoreLegend() {
 export default function HostedPage() {
   const [mounted, setMounted]         = useState(false)
   const [activeTab, setActiveTab]     = useState<'sequence' | 'upload'>('sequence')
+  const [email, setEmail]             = useState('')
   const [sequenceId, setSequenceId]   = useState('')
   const [sequence, setSequence]       = useState('')
   const [uploadType, setUploadType]   = useState<'structure' | 'fasta'>('structure')
@@ -186,6 +187,7 @@ export default function HostedPage() {
   const [modeInfo, setModeInfo]       = useState<Record<string, unknown> | null>(null)
   const [runAlphafold, setRunAlphafold] = useState(false)
   const [downloading, setDownloading] = useState(false)
+  const [downloadingReport, setDownloadingReport] = useState(false)
   const [structureImgUrl, setStructureImgUrl] = useState<string | null>(null)
   const [rawOpen, setRawOpen]         = useState(false)
   const [elapsedSecs, setElapsedSecs] = useState(0)
@@ -258,7 +260,9 @@ export default function HostedPage() {
 
   const handleSequenceSubmit = async () => {
     if (!sequence.trim()) { setMessage('Sequence input is required.'); return }
-    const payload = { input_type: 'sequence', sequence: sequence.trim(), sequence_id: sequenceId || undefined, run_alphafold: runAlphafold }
+    // undefined, not '' — an omitted key keeps the backend storing NULL rather
+    // than an empty string.
+    const payload = { input_type: 'sequence', sequence: sequence.trim(), sequence_id: sequenceId || undefined, email: email.trim() || undefined, run_alphafold: runAlphafold }
     setLastPayload(payload)
     setSubmitting(true); setResult(null); setStructureImgUrl(null); setElapsedSecs(0)
     try {
@@ -278,6 +282,7 @@ export default function HostedPage() {
     setSubmitting(true); setResult(null); setStructureImgUrl(null); setElapsedSecs(0)
     const form = new FormData()
     form.append('input_type', uploadType)
+    if (email.trim()) form.append('email', email.trim())
     form.append('file', uploadFile)
     try {
       const r = await axios.post<HostedJob>(`${API_BASE_URL}/jobs/upload`, form, {
@@ -326,6 +331,26 @@ export default function HostedPage() {
       setMessage(err?.response?.data?.detail || err?.message || 'Download failed.')
     } finally {
       setDownloading(false)
+    }
+  }
+
+  const downloadReportPdf = async () => {
+    if (!job || !accessToken) return
+    setDownloadingReport(true)
+    try {
+      const r = await axios.get(`${API_BASE_URL}/jobs/files/${job.id}/report-pdf`, {
+        headers: { 'x-job-token': accessToken },
+        responseType: 'blob',
+      })
+      const url = window.URL.createObjectURL(r.data)
+      const a = document.createElement('a')
+      a.href = url; a.download = `effector-report-${job.id}.pdf`
+      document.body.appendChild(a); a.click(); a.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (err: any) {
+      setMessage(err?.response?.data?.detail || err?.message || 'Report download failed.')
+    } finally {
+      setDownloadingReport(false)
     }
   }
 
@@ -405,6 +430,22 @@ export default function HostedPage() {
             <span className={styles.panelTitle}>Submit Job</span>
           </div>
           <div className={styles.panelBody}>
+
+            {/* Shared across both tabs — both endpoints accept an email. */}
+            <div className={styles.field}>
+              <label className={styles.label}>Email (optional)</label>
+              <input
+                className={styles.input}
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                placeholder="you@university.edu"
+              />
+              <p className={styles.fieldHint}>
+                We&apos;ll email a PDF report of your results when the job finishes.
+                Leave blank to skip — results still appear on this page either way.
+              </p>
+            </div>
 
             {/* Tabs */}
             <div className={styles.tabs}>
@@ -694,8 +735,11 @@ export default function HostedPage() {
                     {downloading ? 'Downloading…' : '↓ Download AlphaFold PDB'}
                   </button>
                 )}
+                <button className={styles.secondaryBtn} disabled={downloadingReport} onClick={downloadReportPdf}>
+                  {downloadingReport ? 'Preparing…' : '↓ Download PDF Report'}
+                </button>
                 <button className={styles.secondaryBtn} onClick={handlePrintPdf}>
-                  ↓ Download PDF Report
+                  ⎙ Print
                 </button>
               </div>
 
