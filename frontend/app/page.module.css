@@ -379,6 +379,31 @@
   font-size: 0.9rem;
 }
 
+.scoreValue {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.scoreHigher {
+  color: #087f23;
+  font-weight: 700;
+}
+
+.higherBadge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: #dff4e4;
+  color: #087f23;
+  font-family: inherit;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
 .footer {
   margin-top: 60px;
   padding: 30px 0;

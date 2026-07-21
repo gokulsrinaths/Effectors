@@ -511,6 +511,33 @@
 .metricRed    { color: #ff4444; }
 .metricCyan   { color: #00d4ff; }
 
+.scoreValue {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.scoreHigher {
+  color: #00e37a;
+  font-weight: 800;
+}
+
+.higherBadge {
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid rgba(0, 227, 122, 0.35);
+  border-radius: 999px;
+  background: rgba(0, 227, 122, 0.12);
+  color: #00e37a;
+  font-family: inherit;
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .classificationBadge {
   display: inline-block;
   padding: 4px 12px;

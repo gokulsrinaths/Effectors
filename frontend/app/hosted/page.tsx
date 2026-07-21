@@ -27,6 +27,8 @@ interface HostedJob {
 interface TmMatch {
   structure: string
   tm_score: number
+  tm_score_chain1?: number
+  tm_score_chain2?: number
   rmsd: number
   aligned_length: number
 }
@@ -36,7 +38,7 @@ interface HostedResult {
     results?: Array<{
       query_id?: string
       blast_result?: { e_value?: number; identity?: number; hit_id?: string }
-      tm_align_result?: { tm_score?: number; rmsd?: number; top_matches?: TmMatch[] }
+      tm_align_result?: { tm_score?: number; tm_score_chain1?: number; tm_score_chain2?: number; rmsd?: number; top_matches?: TmMatch[] }
       classification?: string
       best_match_id?: string
     }>
@@ -88,6 +90,16 @@ function fmt(v: unknown, decimals = 3): string {
 function fmtEval(v?: number): string {
   if (v == null) return '—'
   return v.toExponential(2)
+}
+
+function TmScoreValue({ value, other }: { value?: number; other?: number }) {
+  const isHigher = value != null && other != null && value > other
+  return (
+    <span className={`${styles.scoreValue} ${isHigher ? styles.scoreHigher : ''}`}>
+      {value != null ? value.toFixed(3) : '—'}
+      {isHigher && <span className={styles.higherBadge}>Higher</span>}
+    </span>
+  )
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -272,6 +284,8 @@ export default function HostedPage() {
   // Derived metrics from result
   const firstResult  = result?.processing_result?.results?.[0]
   const tmScore      = firstResult?.tm_align_result?.tm_score ?? (result?.summary?.tm_score as number | undefined)
+  const tmScoreChain1 = firstResult?.tm_align_result?.tm_score_chain1 ?? tmScore
+  const tmScoreChain2 = firstResult?.tm_align_result?.tm_score_chain2
   const eValue       = firstResult?.blast_result?.e_value
   const identity     = firstResult?.blast_result?.identity
   const bestMatch    = firstResult?.best_match_id ?? (result?.summary?.best_match_id as string | undefined)
@@ -457,8 +471,16 @@ export default function HostedPage() {
                 }
               </div>
               <div className={styles.metric}>
-                <span className={styles.metricLabel}>TM-Score</span>
-                <span className={`${styles.metricValue} ${tmScoreColor(tmScore)}`}>{fmt(tmScore)}</span>
+                <span className={styles.metricLabel}>TM-Score Query (Chain 1)</span>
+                <span className={`${styles.metricValue} ${tmScoreColor(tmScoreChain1)}`}>
+                  <TmScoreValue value={tmScoreChain1} other={tmScoreChain2} />
+                </span>
+              </div>
+              <div className={styles.metric}>
+                <span className={styles.metricLabel}>TM-Score Target (Chain 2)</span>
+                <span className={`${styles.metricValue} ${tmScoreColor(tmScoreChain2)}`}>
+                  <TmScoreValue value={tmScoreChain2} other={tmScoreChain1} />
+                </span>
               </div>
               <div className={styles.metric}>
                 <span className={styles.metricLabel}>BLAST E-value</span>
@@ -499,7 +521,8 @@ export default function HostedPage() {
                     <tr>
                       <th>#</th>
                       <th>Structure ID</th>
-                      <th>TM-Score</th>
+                      <th>Query TM-Score (Chain 1)</th>
+                      <th>Target TM-Score (Chain 2)</th>
                       <th>RMSD (Å)</th>
                       <th>Aligned Length</th>
                       <th>Download</th>
@@ -510,7 +533,8 @@ export default function HostedPage() {
                       <tr key={i}>
                         <td style={{ color: '#8899aa', fontSize: '0.8rem' }}>{i + 1}</td>
                         <td style={{ fontFamily: 'monospace', fontSize: '0.8rem', color: '#b8d4e8' }}>{m.structure}</td>
-                        <td style={{ color: m.tm_score >= 0.5 ? '#00c864' : m.tm_score >= 0.3 ? '#f0a000' : '#ff4444' }}>{m.tm_score.toFixed(3)}</td>
+                        <td><TmScoreValue value={m.tm_score_chain1 ?? m.tm_score} other={m.tm_score_chain2} /></td>
+                        <td><TmScoreValue value={m.tm_score_chain2} other={m.tm_score_chain1 ?? m.tm_score} /></td>
                         <td style={{ color: '#b8d4e8' }}>{m.rmsd.toFixed(2)}</td>
                         <td style={{ color: '#8899aa' }}>{m.aligned_length}</td>
                         <td>
@@ -540,7 +564,8 @@ export default function HostedPage() {
                     <tr>
                       <th>Query ID</th>
                       <th>Best Match</th>
-                      <th>TM-score</th>
+                      <th>Query TM-score (Chain 1)</th>
+                      <th>Target TM-score (Chain 2)</th>
                       <th>E-value</th>
                       <th>Classification</th>
                     </tr>
@@ -550,9 +575,8 @@ export default function HostedPage() {
                       <tr key={i}>
                         <td style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>{r.query_id ?? '—'}</td>
                         <td style={{ fontFamily: 'monospace', fontSize: '0.78rem', color: '#b8d4e8' }}>{r.best_match_id ?? '—'}</td>
-                        <td style={{ color: (r.tm_align_result?.tm_score ?? 0) >= 0.5 ? '#00c864' : (r.tm_align_result?.tm_score ?? 0) >= 0.3 ? '#f0a000' : '#ff4444' }}>
-                          {r.tm_align_result?.tm_score != null ? r.tm_align_result.tm_score.toFixed(3) : '—'}
-                        </td>
+                        <td><TmScoreValue value={r.tm_align_result?.tm_score_chain1 ?? r.tm_align_result?.tm_score} other={r.tm_align_result?.tm_score_chain2} /></td>
+                        <td><TmScoreValue value={r.tm_align_result?.tm_score_chain2} other={r.tm_align_result?.tm_score_chain1 ?? r.tm_align_result?.tm_score} /></td>
                         <td style={{ color: '#7a9abf', fontSize: '0.8rem' }}>
                           {r.blast_result?.e_value != null ? r.blast_result.e_value.toExponential(2) : '—'}
                         </td>

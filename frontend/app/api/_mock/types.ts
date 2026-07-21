@@ -9,6 +9,8 @@ export interface BlastResult {
 export interface TmAlignResult {
   target_id: string
   tm_score: number
+  tm_score_chain1?: number
+  tm_score_chain2?: number
   rmsd: number
   alignment_length: number
 }
@@ -33,4 +35,3 @@ export interface ProcessingResult {
   completed_at: string
   alphafold_queued?: boolean
 }
-

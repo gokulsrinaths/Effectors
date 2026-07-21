@@ -28,8 +28,20 @@ interface BlastResult {
 interface TmAlignResult {
   target_id: string
   tm_score: number
+  tm_score_chain1?: number
+  tm_score_chain2?: number
   rmsd: number
   alignment_length: number
+}
+
+function TmScoreValue({ value, other }: { value?: number; other?: number }) {
+  const isHigher = value != null && other != null && value > other
+  return (
+    <span className={`${styles.scoreValue} ${isHigher ? styles.scoreHigher : ''}`}>
+      {value != null ? value.toFixed(3) : '—'}
+      {isHigher && <span className={styles.higherBadge}>Higher</span>}
+    </span>
+  )
 }
 
 interface ClassificationResult {
@@ -503,7 +515,8 @@ export default function Home() {
                   <tr>
                     <th>Query ID</th>
                     <th>Best Match</th>
-                    <th>TM-score</th>
+                    <th>TM-score Query (Chain 1)</th>
+                    <th>TM-score Target (Chain 2)</th>
                     <th>Classification</th>
                     <th>Details</th>
                   </tr>
@@ -564,12 +577,18 @@ function ResultRow({
     return '#6c757d'
   }
 
+  const chain1Score = result.tm_align_result?.tm_score_chain1
+    ?? result.tm_align_result?.tm_score
+    ?? result.tm_score
+  const chain2Score = result.tm_align_result?.tm_score_chain2
+
   return (
     <>
       <tr>
         <td>{result.query_id}</td>
         <td>{result.best_match_id || '—'}</td>
-        <td>{result.tm_score != null ? result.tm_score.toFixed(3) : '—'}</td>
+        <td><TmScoreValue value={chain1Score} other={chain2Score} /></td>
+        <td><TmScoreValue value={chain2Score} other={chain1Score} /></td>
         <td>
           <span style={{ color: classColor(result.classification), fontWeight: 600 }}>
             {result.classification}
@@ -584,7 +603,7 @@ function ResultRow({
 
       {expanded && (
         <tr>
-          <td colSpan={5} className={styles.detailsCell}>
+          <td colSpan={6} className={styles.detailsCell}>
             <div className={styles.detailsContent}>
 
               {result.blast_result && (
@@ -607,7 +626,14 @@ function ResultRow({
                   <h4>TM-align</h4>
                   <ul>
                     <li>Target: {result.tm_align_result.target_id}</li>
-                    <li>TM-score: {result.tm_align_result.tm_score.toFixed(3)}</li>
+                    <li>
+                      Query-normalized TM-score (Chain 1):{' '}
+                      <TmScoreValue value={chain1Score} other={chain2Score} />
+                    </li>
+                    <li>
+                      Target-normalized TM-score (Chain 2):{' '}
+                      <TmScoreValue value={chain2Score} other={chain1Score} />
+                    </li>
                     <li>RMSD: {result.tm_align_result.rmsd.toFixed(2)} Å</li>
                     <li>Alignment Length: {result.tm_align_result.alignment_length}</li>
                   </ul>
