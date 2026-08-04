@@ -205,7 +205,6 @@ def _build(job_id: str, result: dict | None) -> Path | None:
         ["Coverage (query / target)",
          f"{_fmt_pct(tm.get('coverage_query'))} / {_fmt_pct(tm.get('coverage_target'))}"],
         ["Structural sequence identity", _fmt_pct(tm.get("seq_id"))],
-        ["RMSD", "—" if tm.get("rmsd") is None else f"{tm['rmsd']:.2f} Å"],
         ["Aligned length", _fmt(tm.get("alignment_length"), 0)],
     ]
     alphafold_status = (result.get("alphafold") or {}).get("status")
@@ -228,7 +227,7 @@ def _build(job_id: str, result: dict | None) -> Path | None:
     if top:
         story.append(Paragraph("Ranked by the better of the two normalized scores.", small))
         story.append(Spacer(1, 5))
-        head = ["#", "Structure", "Chain 1", "Chain 2", "Alignment", "RMSD (Å)", "Aligned"]
+        head = ["#", "Structure", "Chain 1", "Chain 2", "Alignment", "Aligned"]
         data = [[Paragraph(f"<b>{c}</b>", small) for c in head]]
         for i, m in enumerate(top[:10], start=1):
             c1 = m.get("tm_score_chain1", m.get("tm_score"))
@@ -240,10 +239,9 @@ def _build(job_id: str, result: dict | None) -> Path | None:
                 Paragraph(f'<font color="{_band_color(c1)}"><b>{_fmt(c1)}</b></font>', small),
                 Paragraph(f'<font color="{_band_color(c2)}"><b>{_fmt(c2)}</b></font>', small),
                 Paragraph(_TYPE_SHORT.get(mtype, mtype or "—"), small),
-                Paragraph("—" if m.get("rmsd") is None else f"{m['rmsd']:.2f}", small),
                 Paragraph(_fmt(m.get("aligned_length"), 0), small),
             ])
-        widths = [avail * w for w in (0.05, 0.30, 0.12, 0.12, 0.17, 0.12, 0.12)]
+        widths = [avail * w for w in (0.06, 0.34, 0.14, 0.14, 0.18, 0.14)]
         tbl = Table(data, colWidths=widths, repeatRows=1)
         tbl.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f3f5")),
