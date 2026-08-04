@@ -84,6 +84,17 @@ def _fmt_pct(v: float | None) -> str:
     return "—" if v is None else f"{v * 100:.0f}%"
 
 
+def _plddt_label(v: float) -> str:
+    # AlphaFold's own confidence bands for mean pLDDT.
+    if v >= 90:
+        return "very high"
+    if v >= 70:
+        return "confident"
+    if v >= 50:
+        return "low"
+    return "very low"
+
+
 def _find_structure_image(job_id: str, result: dict) -> Path | None:
     """Locate the rendered structure PNG.
 
@@ -207,9 +218,14 @@ def _build(job_id: str, result: dict | None) -> Path | None:
         ["Structural sequence identity", _fmt_pct(tm.get("seq_id"))],
         ["Aligned length", _fmt(tm.get("alignment_length"), 0)],
     ]
-    alphafold_status = (result.get("alphafold") or {}).get("status")
+    alphafold = result.get("alphafold") or {}
+    alphafold_status = alphafold.get("status")
     if alphafold_status:
         rows.append(["AlphaFold prediction", str(alphafold_status)])
+    mean_plddt = alphafold.get("mean_plddt")
+    if mean_plddt is not None:
+        rows.append(["Prediction confidence (pLDDT)",
+                     f"{mean_plddt:.1f} ({_plddt_label(mean_plddt)})"])
 
     meta = Table([[Paragraph(k, body), Paragraph(f"<b>{v}</b>", body)] for k, v in rows],
                  colWidths=[avail * 0.55, avail * 0.45])

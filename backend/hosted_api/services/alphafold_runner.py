@@ -33,6 +33,32 @@ def _pick_predicted_pdb(output_dir: Path) -> Path | None:
     return sorted(candidates)[0]
 
 
+def _mean_plddt(pdb_path: Path) -> float | None:
+    """Mean pLDDT of a ColabFold model.
+
+    ColabFold writes each residue's pLDDT confidence into the B-factor column of
+    the PDB, so the per-model confidence is the mean B-factor over CA atoms.
+    Returns None if the column can't be read.
+    """
+    try:
+        total = 0.0
+        count = 0
+        for line in pdb_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            # Average over CA atoms only — one value per residue, matching how
+            # ColabFold reports pLDDT.
+            if line.startswith("ATOM") and line[12:16].strip() == "CA":
+                try:
+                    total += float(line[60:66])
+                    count += 1
+                except ValueError:
+                    continue
+        if count == 0:
+            return None
+        return round(total / count, 2)
+    except OSError:
+        return None
+
+
 def run_alphafold_prediction(*, sequence_id: str, sequence: str, output_dir: Path) -> dict:
     """Run an AlphaFold-like prediction using an external CLI.
 
@@ -100,6 +126,7 @@ def run_alphafold_prediction(*, sequence_id: str, sequence: str, output_dir: Pat
         "tool": alphafold_bin,
         "output_dir": str(output_dir),
         "pdb_local_path": str(predicted),
+        "mean_plddt": _mean_plddt(predicted),
         "stdout": (completed.stdout or "").strip(),
     }
 
