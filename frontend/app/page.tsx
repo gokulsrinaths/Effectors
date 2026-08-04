@@ -709,7 +709,6 @@ function ResultRow({
                     {result.tm_align_result.seq_id != null && (
                       <li>Structural sequence identity: {fmtPct(result.tm_align_result.seq_id)}</li>
                     )}
-                    <li>RMSD: {result.tm_align_result.rmsd.toFixed(2)} Å</li>
                     <li>Alignment Length: {result.tm_align_result.alignment_length}</li>
                   </ul>
                 </div>

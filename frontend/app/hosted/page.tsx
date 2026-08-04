@@ -609,10 +609,6 @@ export default function HostedPage() {
                 <span className={styles.metricLabel}>Best Match</span>
                 <span className={styles.metricValue} style={{ fontSize: '0.78rem', color: '#b8d4e8', wordBreak: 'break-all' }}>{bestMatch ?? '—'}</span>
               </div>
-              <div className={styles.metric} style={{ flexBasis: '100%' }}>
-                <span className={styles.metricLabel}>RMSD</span>
-                <span className={styles.metricValue} style={{ color: '#b8d4e8' }}>{firstResult?.tm_align_result?.rmsd != null ? firstResult.tm_align_result.rmsd.toFixed(2) + ' Å' : '—'}</span>
-              </div>
               {alphaStatus && (
                 <div className={styles.metric}>
                   <span className={styles.metricLabel}>AlphaFold</span>
@@ -638,7 +634,6 @@ export default function HostedPage() {
                       <th>Query TM-Score (Chain 1)</th>
                       <th>Target TM-Score (Chain 2)</th>
                       <th>Alignment</th>
-                      <th>RMSD (Å)</th>
                       <th>Aligned Length</th>
                     </tr>
                   </thead>
@@ -650,7 +645,6 @@ export default function HostedPage() {
                         <td><TmScoreValue value={m.tm_score_chain1 ?? m.tm_score} other={m.tm_score_chain2} /></td>
                         <td><TmScoreValue value={m.tm_score_chain2} other={m.tm_score_chain1 ?? m.tm_score} /></td>
                         <td><AlignmentTypeBadge type={m.alignment_type} /></td>
-                        <td style={{ color: '#b8d4e8' }}>{m.rmsd.toFixed(2)}</td>
                         <td style={{ color: '#8899aa' }}>{m.aligned_length}</td>
                       </tr>
                     ))}
