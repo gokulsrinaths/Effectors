@@ -61,7 +61,7 @@ interface HostedResult {
     }>
   }
   summary?: Record<string, unknown>
-  alphafold?: { status?: string; pdb_local_path?: string }
+  alphafold?: { status?: string; pdb_local_path?: string; mean_plddt?: number }
   structure_image_path?: string
   structure_image_local_path?: string
 }
@@ -112,6 +112,23 @@ const ALIGNMENT_TYPE_TEXT: Record<string, string> = {
   domain_match: 'Domain match',
   ambiguous: 'Ambiguous',
   unrelated: 'Unrelated',
+}
+
+// AlphaFold pLDDT confidence bands (per-residue → mean), on AlphaFold's own scale.
+function plddtColor(v?: number) {
+  if (v == null) return ''
+  if (v >= 90) return styles.metricGreen
+  if (v >= 70) return styles.metricGreen
+  if (v >= 50) return styles.metricYellow
+  return styles.metricRed
+}
+
+function plddtLabel(v?: number): string {
+  if (v == null) return ''
+  if (v >= 90) return 'Very high'
+  if (v >= 70) return 'Confident'
+  if (v >= 50) return 'Low'
+  return 'Very low'
 }
 
 function fmtPct(v?: number): string {
@@ -382,6 +399,7 @@ export default function HostedPage() {
   const bestMatch    = firstResult?.best_match_id ?? (result?.summary?.best_match_id as string | undefined)
   const classification = firstResult?.classification ?? (result?.summary?.classification as string | undefined)
   const alphaStatus  = result?.alphafold?.status
+  const meanPlddt    = result?.alphafold?.mean_plddt
   const topMatches   = firstResult?.tm_align_result?.top_matches ?? []
 
   if (!mounted) return <div style={{ minHeight: '100vh', background: '#0a0e1a' }} />
@@ -614,6 +632,14 @@ export default function HostedPage() {
                   <span className={styles.metricLabel}>AlphaFold</span>
                   <span className={`${styles.metricValue} ${alphaStatus === 'completed' ? styles.metricGreen : alphaStatus === 'failed' ? styles.metricRed : styles.metricCyan}`}>
                     {alphaStatus}
+                  </span>
+                </div>
+              )}
+              {meanPlddt != null && (
+                <div className={styles.metric}>
+                  <span className={styles.metricLabel}>Prediction Confidence (pLDDT)</span>
+                  <span className={`${styles.metricValue} ${plddtColor(meanPlddt)}`}>
+                    {meanPlddt.toFixed(1)} <span style={{ fontSize: '0.72rem', opacity: 0.85 }}>({plddtLabel(meanPlddt)})</span>
                   </span>
                 </div>
               )}
